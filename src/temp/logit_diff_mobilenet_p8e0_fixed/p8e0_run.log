@@ -1,0 +1,3 @@
+MAIN type=p8e0 avg=1.09453e+07 us (iters=1, warmup=0)
+  top1=885 top5=[885,646,111,423,281]
+COMPARE baseline=p8e0 so=/home/lai/mlir_toy/onnx-mlir/src/temp/mobilenet11/mobilenetv2-12-qdq-p8e0.fixed.so

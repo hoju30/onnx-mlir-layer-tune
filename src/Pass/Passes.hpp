@@ -89,6 +89,16 @@ std::unique_ptr<mlir::Pass> createSetONNXNodeNamePass();
 /// Pass for verifying Onnx ops before lowering to Krnl
 std::unique_ptr<mlir::Pass> createONNXPreKrnlVerifyPass();
 
+// add lowering posit pass 11/27
+std::unique_ptr<mlir::Pass> createConvertONNXToPositPass();
+std::unique_ptr<mlir::Pass> createConvertONNXToPositPass(unsigned nbits,
+                                                         unsigned es);
+
+// add lowering posit to krnl pass 12/17
+std::unique_ptr<mlir::Pass> createConvertPositToKrnlPass();
+std::unique_ptr<mlir::Pass> createConvertPositToKrnlPass(unsigned nbits, unsigned es);
+
+
 /// Add pass for lowering to Krnl IR.
 std::unique_ptr<mlir::Pass> createLowerToKrnlPass();
 std::unique_ptr<mlir::Pass> createLowerToKrnlPass(bool enableTiling,

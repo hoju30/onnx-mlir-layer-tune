@@ -1,0 +1,35 @@
+time_model_single_format config
+  model_name=mobilenetv2-12
+  format=p4e0
+  target_so=./temp/mobilenet_extra_all//mobilenetv2-12-qdq-p4e0.so
+  target_type=f32
+  txt_dir=./temp/imagenette_val_224
+  limit=10
+  shape=1x3x224x224
+  warmup=0
+  iters=1
+  timeout_sec=0
+  baseline=none
+  label_map=./temp/imagenette_val_224_labels.txt
+  mode=no-benchmark
+
+[progress] 1/10
+[progress] 2/10
+[progress] 3/10
+[progress] 4/10
+[progress] 5/10
+[progress] 6/10
+[progress] 7/10
+[progress] 8/10
+[progress] 9/10
+[progress] 10/10
+
+Summary
+  target=mobilenetv2-12-p4e0
+  samples_used=10
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=17418840
+  total_wall_time_sec=174.949
+  GT Top1(%)=0 Top5(%)=0
+  log_file=./temp/mobilenet_extra_all//extra_parallel_logs/mobilenetv2-12-p4e0.dataset.log

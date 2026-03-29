@@ -540,6 +540,11 @@ int64_t DimAnalysis::build(DimT d, int64_t setID) {
 }
 
 void DimAnalysis::buildFunctionArgsRes(func::FuncOp funcOp) {
+  // External declarations have no entry block / terminator.
+  // Skip them because there is no body to analyze for result dimensions.
+  if (funcOp.isExternal() || funcOp.getBody().empty())
+    return;
+
   // If dim_params are available, try to group dims using dim_params because
   // dimensions wih the same dim_param are supposed to be the same at runtime.
 
@@ -953,8 +958,10 @@ void DimAnalysis::visitDim(
     // inputs.
 
     // Get the dynamic dimension from data.
-    auto dataType = mlir::cast<RankedTensorType>(data.getType());
-    auto outputType = mlir::cast<RankedTensorType>(output.getType());
+    auto dataType = mlir::dyn_cast<RankedTensorType>(data.getType());
+    auto outputType = mlir::dyn_cast<RankedTensorType>(output.getType());
+    if (!dataType || !outputType)
+      return;
     // Check if there is only one dynamic dimension in the data and output.
     bool dataHasOneDynamicDim =
         (llvm::count(dataType.getShape(), ShapedType::kDynamic) == 1);

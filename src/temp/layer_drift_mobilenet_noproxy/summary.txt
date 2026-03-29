@@ -1,0 +1,10 @@
+Final logits compare: p8e0 vs nqdq-f32
+N=1000
+MAE=4.518086261
+RMSE=5.410066471
+MaxAbs=15.80529213
+Cosine=0.107315961
+Top1(p8,ref)=(457,0)
+Top5Overlap=0
+PTRACE_rows=207
+PTRACE_csv=./temp/layer_drift_mobilenet_noproxy/p8_layer_trace.csv

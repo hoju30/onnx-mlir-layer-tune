@@ -1,0 +1,34 @@
+time_model_single_format config
+  model_name=mobilenetv2-12
+  format=p8e1
+  target_so=/home/lai/mlir_toy/onnx-mlir/src/temp/mobilenet11_universal_test/mobilenetv2-12-qdq-p8e1.so
+  target_type=f32
+  txt_dir=/home/lai/mlir_toy/onnx-mlir/src/temp/imagenette_val_224
+  limit=1
+  shape=1x3x224x224
+  warmup=0
+  iters=1
+  timeout_sec=0
+  baseline=nqdq-f32
+  baseline_so=/home/lai/mlir_toy/onnx-mlir/src/temp/mobilenet11_universal_test/mobilenetv2-12-nqdq-f32.so
+  mode=no-benchmark
+
+=== sample[1/1] /home/lai/mlir_toy/onnx-mlir/src/temp/imagenette_val_224/img_00000.txt rc=0 ===
+MAIN type=f32 avg=6.83056e+07 us (iters=1, warmup=0)
+  top1=0 top5=[0,394,764,413,48]
+CMP#1 type=f32 avg=60338.2 us so=/home/lai/mlir_toy/onnx-mlir/src/temp/mobilenet11_universal_test/mobilenetv2-12-nqdq-f32.so
+  top1=0 top5=[0,764,389,150,758]
+COMPARE baseline=f32 so=/home/lai/mlir_toy/onnx-mlir/src/temp/mobilenet11_universal_test/mobilenetv2-12-nqdq-f32.so
+  C1 target=f32 so=/home/lai/mlir_toy/onnx-mlir/src/temp/mobilenet11_universal_test/mobilenetv2-12-qdq-p8e1.so N=1000 MAE=2.11189 RMSE=2.64985 MaxAbs=11.0553 RMAE=2.91079 Cosine=0.471721 JS=0.582006 Top1(0,0)=match Top5Overlap=2 LatencyRatio=1132.04x
+
+
+Summary
+  target=mobilenetv2-12-p8e1
+  samples_used=1
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=68305600
+  total_wall_time_sec=68.468
+  baseline=nqdq-f32
+  MAE=2.11189 RMSE=2.64985 MaxAbs=11.0553 Cosine=0.471721 RMAE=2.91079 JS=0.582006 Top1Match(%)=100 Top5Overlap=2
+  log_file=/home/lai/mlir_toy/onnx-mlir/src/temp/mobilenet11_universal_test/mobilenetv2-12-p8e1.dataset.log

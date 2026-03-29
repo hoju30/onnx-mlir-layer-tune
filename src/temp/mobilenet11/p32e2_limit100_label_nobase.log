@@ -1,0 +1,29 @@
+time_model_single_format config
+  model_name=mobilenetv2-12
+  format=p32e2
+  target_so=./temp/mobilenet11/mobilenetv2-12-qdq-p32e2.so
+  target_type=f32
+  txt_dir=./temp/imagenette_val_224
+  limit=100
+  shape=1x3x224x224
+  warmup=0
+  iters=1
+  timeout_sec=0
+  baseline=none
+  label_map=./temp/imagenette_val_224_labels.txt
+  mode=no-benchmark
+
+=== sample[1/100] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+MAIN type=f32 avg=4.6442e+08 us (iters=1, warmup=0)
+  top1=885 top5=[885,646,111,423,529]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11/mobilenetv2-12-qdq-p32e2.so
+
+[progress] 1/100
+=== sample[2/100] ./temp/imagenette_val_224/img_00001.txt rc=0 ===
+MAIN type=f32 avg=4.63317e+08 us (iters=1, warmup=0)
+  top1=885 top5=[885,646,111,423,529]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11/mobilenetv2-12-qdq-p32e2.so
+
+[progress] 2/100

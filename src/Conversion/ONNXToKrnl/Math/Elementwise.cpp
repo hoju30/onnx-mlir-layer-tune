@@ -1849,6 +1849,8 @@ bool OpFusionHelper::areInputsValidForFusion(
 
   Type defOutputType = defOp->getResultTypes()[0];
   Type useOutputType = useOp->getResultTypes()[0];
+  if (!isRankedShapedType(defOutputType) || !isRankedShapedType(useOutputType))
+    return false;
   ArrayRef<int64_t> defShape = getShape(defOutputType);
   ArrayRef<int64_t> useShape = getShape(useOutputType);
   if (defShape != useShape) {

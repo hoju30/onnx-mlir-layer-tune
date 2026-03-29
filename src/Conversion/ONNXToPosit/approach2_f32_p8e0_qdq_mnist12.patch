@@ -1,0 +1,549 @@
+--- PositOps.td+++ PositOps.td@@ -42,4 +42,31 @@   let hasFolder = 0; 
+ }
+ 
++
++
++// [new MOD] Sub/Mul/Div ops (interface stays AnyType, runtime does f32->posit->f32)
++def Posit_SubOp : Posit_Op<"sub", [Pure, SameOperandsAndResultType]> {
++  let summary = "subtract two values via posit arithmetic";
++  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
++  let results   = (outs AnyType:$result);
++  let assemblyFormat = "$lhs  `,` $rhs  attr-dict `:` type($result)";
++  let hasFolder = 0;
++}
++
++def Posit_MulOp : Posit_Op<"mul", [Pure, SameOperandsAndResultType]> {
++  let summary = "multiply two values via posit arithmetic";
++  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
++  let results   = (outs AnyType:$result);
++  let assemblyFormat = "$lhs  `,` $rhs  attr-dict `:` type($result)";
++  let hasFolder = 0;
++}
++
++def Posit_DivOp : Posit_Op<"div", [Pure, SameOperandsAndResultType]> {
++  let summary = "divide two values via posit arithmetic";
++  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
++  let results   = (outs AnyType:$result);
++  let assemblyFormat = "$lhs  `,` $rhs  attr-dict `:` type($result)";
++  let hasFolder = 0;
++}
++
+ #endif // POSIT_OPS--- TypeConverters.cpp+++ TypeConverters.cpp@@ -66,8 +66,10 @@ 
+ PositTypeConverter::PositTypeConverter(unsigned nbits, unsigned es,
+                                        MLIRContext *ctx) {
+-  // 關鍵
+-  addConversion([nbits, es, ctx](Type t) { return convertContainer(t, nbits, es, ctx); });
++  // [new MOD] 這個 pass 先「只換算術 op」，不要做全域 f32->posit 型別轉換；
++  // 不然像 MNIST 的 Conv/MatMul 會因為沒有對應 lowering 而整個爆炸。
++  // 所以先放 identity conversion，讓其它 type 都維持原狀。
++  addConversion([](Type t) { return t; });
+ 
+   // Source/Target materialization：用 UnrealizedConversionCastOp
+   auto makeCast = [](OpBuilder &b, Type dst, ValueRange inputs,
+@@ -85,5 +87,4 @@   addTargetMaterialization(makeCast);
+ }
+ 
+-
+ } // namespace onnx_mlir
+--- ONNXToPosit.cpp+++ ONNXToPosit.cpp@@ -4,6 +4,7 @@ #include "mlir/Dialect/Arith/IR/Arith.h"
+ #include "mlir/Dialect/Func/IR/FuncOps.h"
+ #include "mlir/Dialect/Tensor/IR/Tensor.h"
++#include "src/Dialect/ONNX/ONNXDialect.h" // [new MOD]
+ #include "mlir/IR/BuiltinOps.h"
+ #include "mlir/Pass/Pass.h"
+ #include "mlir/Transforms/DialectConversion.h"
+@@ -82,18 +83,18 @@     // 設定 ConversionTarget
+     ConversionTarget target(ctx);
+     // 最終允許存在的 dialect
+-    target.addLegalDialect<posit::PositDialect, arith::ArithDialect,
++    target.addLegalDialect<ONNXDialect, // [new MOD]
++                           posit::PositDialect, arith::ArithDialect,
+                            tensor::TensorDialect, func::FuncDialect>();
+     // UnrealizedConversionCast 是 legal（用來 bridge type conversion）
+     target.addLegalOp<UnrealizedConversionCastOp>();
+ 
+     // 把我們已覆蓋的 ONNX ops 設為 illegal，確保一定要被轉換
+     // 12/3 先測constant就好  ONNXAddOp, ONNXConstantOp
+-    target.addIllegalOp<ONNXAddOp, ONNXConstantOp>();
++    target.addIllegalOp<ONNXAddOp, ONNXSubOp, ONNXMulOp, ONNXDivOp>(); // [new MOD]
+ 
+     // 其他 op 若其型別對 TypeConverter 來說是 legal，就暫時視為 legal
+-    target.markUnknownOpDynamicallyLegal(
+-        [&](Operation *op) { return typeConverter.isLegal(op); });
++    target.markUnknownOpDynamicallyLegal([](Operation *) { return true; }); // [new MOD]
+ 
+     // 套用轉換
+     if (failed(applyPartialConversion(module, target, std::move(patterns))))
+--- Math.cpp+++ Math.cpp@@ -75,6 +75,73 @@   }
+ };
+ 
++// [new MOD] ONNXSubOp -> posit.sub
++struct ONNXSubOpLowering : public OpConversionPattern<mlir::ONNXSubOp> {
++  using OpConversionPattern<mlir::ONNXSubOp>::OpConversionPattern;
++
++  LogicalResult matchAndRewrite(mlir::ONNXSubOp op,
++                                typename OpConversionPattern::OpAdaptor adaptor,
++                                ConversionPatternRewriter &rewriter) const override {
++    Location loc = op.getLoc();
++    Type origOutType = op.getResult().getType();
++    Type convertedType = getTypeConverter()->convertType(origOutType);
++    if (!convertedType)
++      return rewriter.notifyMatchFailure(op, "failed to convert result type");
++    if (adaptor.getOperands().size() != 2)
++      return rewriter.notifyMatchFailure(op, "expected 2 operands");
++    Value lhs = adaptor.getOperands()[0];
++    Value rhs = adaptor.getOperands()[1];
++    auto newOp = rewriter.create<mlir::posit::SubOp>(loc, convertedType, lhs, rhs);
++    rewriter.replaceOp(op, newOp.getResult());
++    return success();
++  }
++};
++
++// [new MOD] ONNXMulOp -> posit.mul
++struct ONNXMulOpLowering : public OpConversionPattern<mlir::ONNXMulOp> {
++  using OpConversionPattern<mlir::ONNXMulOp>::OpConversionPattern;
++
++  LogicalResult matchAndRewrite(mlir::ONNXMulOp op,
++                                typename OpConversionPattern::OpAdaptor adaptor,
++                                ConversionPatternRewriter &rewriter) const override {
++    Location loc = op.getLoc();
++    Type origOutType = op.getResult().getType();
++    Type convertedType = getTypeConverter()->convertType(origOutType);
++    if (!convertedType)
++      return rewriter.notifyMatchFailure(op, "failed to convert result type");
++    if (adaptor.getOperands().size() != 2)
++      return rewriter.notifyMatchFailure(op, "expected 2 operands");
++    Value lhs = adaptor.getOperands()[0];
++    Value rhs = adaptor.getOperands()[1];
++    auto newOp = rewriter.create<mlir::posit::MulOp>(loc, convertedType, lhs, rhs);
++    rewriter.replaceOp(op, newOp.getResult());
++    return success();
++  }
++};
++
++// [new MOD] ONNXDivOp -> posit.div
++struct ONNXDivOpLowering : public OpConversionPattern<mlir::ONNXDivOp> {
++  using OpConversionPattern<mlir::ONNXDivOp>::OpConversionPattern;
++
++  LogicalResult matchAndRewrite(mlir::ONNXDivOp op,
++                                typename OpConversionPattern::OpAdaptor adaptor,
++                                ConversionPatternRewriter &rewriter) const override {
++    Location loc = op.getLoc();
++    Type origOutType = op.getResult().getType();
++    Type convertedType = getTypeConverter()->convertType(origOutType);
++    if (!convertedType)
++      return rewriter.notifyMatchFailure(op, "failed to convert result type");
++    if (adaptor.getOperands().size() != 2)
++      return rewriter.notifyMatchFailure(op, "expected 2 operands");
++    Value lhs = adaptor.getOperands()[0];
++    Value rhs = adaptor.getOperands()[1];
++    auto newOp = rewriter.create<mlir::posit::DivOp>(loc, convertedType, lhs, rhs);
++    rewriter.replaceOp(op, newOp.getResult());
++    return success();
++  }
++};
++
++
+ // ONNXConstantOp -> posit.constant
+ 
+ struct ONNXConstantOpLowering
+@@ -172,7 +239,8 @@ void populateONNXToPositConversionPattern(TypeConverter &typeConverter,
+                                           RewritePatternSet &patterns,
+                                           MLIRContext *ctx) {
+-  patterns.add<ONNXAddOpLowering, ONNXConstantOpLowering>(typeConverter, ctx);
++  patterns.add<ONNXAddOpLowering, ONNXSubOpLowering, ONNXMulOpLowering, ONNXDivOpLowering>(typeConverter, ctx); // [new MOD]
++  // patterns.add<ONNXConstantOpLowering>(typeConverter, ctx); // [new MOD] 先不要動常數，避免把 Conv/Gemm 的權重也轉掉
+ }
+ 
+ } // namespace onnx_mlir--- PositToKrnl.cpp+++ PositToKrnl.cpp@@ -53,10 +53,12 @@     PositToKrnlTypeConverter typeConverter(nbits, es, &ctx);
+ 
+     RewritePatternSet patterns(&ctx);
+-    populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns, typeConverter);
+-    populateCallOpTypeConversionPattern(patterns, typeConverter);
+-    populateReturnOpTypeConversionPattern(patterns, typeConverter);
+-    populateBranchOpInterfaceTypeConversionPattern(patterns, typeConverter);
++    // [new MOD] 先不要改 function signature/CFG 的 tensor<...> 型別，避免把整個 ONNX graph 一起 memref 化。
++    // 我們只轉 posit::(add/sub/mul/div/constant) 這些 op。
++    // populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns, typeConverter);
++    // populateCallOpTypeConversionPattern(patterns, typeConverter);
++    // populateReturnOpTypeConversionPattern(patterns, typeConverter);
++    // populateBranchOpInterfaceTypeConversionPattern(patterns, typeConverter);
+ 
+     populatePositToKrnlConversionPattern(typeConverter, patterns, &ctx);
+ 
+@@ -68,11 +70,11 @@     target.addLegalOp<UnrealizedConversionCastOp>();
+ 
+     // 把 Posit ops 變 illegal，逼它們一定要被轉掉
+-    target.addIllegalOp<posit::ConstantOp, posit::AddOp>();
++    target.addIllegalOp<posit::ConstantOp, posit::AddOp,
++                         posit::SubOp, posit::MulOp, posit::DivOp>(); // [new MOD]
+ 
+     // 其他未知 op
+-    target.markUnknownOpDynamicallyLegal(
+-        [&](Operation *op) { return typeConverter.isLegal(op); });
++    target.markUnknownOpDynamicallyLegal([](Operation *) { return true; }); // [new MOD]
+ 
+     if (failed(applyPartialConversion(module, target, std::move(patterns))))
+       signalPassFailure();
+--- Math_krnl.cpp+++ Math_krnl.cpp@@ -2,6 +2,8 @@ #include "mlir/Transforms/DialectConversion.h"
+ #include "llvm/Support/Casting.h"
+ 
++#include <string> // [new MOD]
++
+ #include "mlir/Dialect/Func/IR/FuncOps.h"
+ #include "mlir/Dialect/MemRef/IR/MemRef.h"
+ 
+@@ -20,24 +22,28 @@ //  func.func @posit_add_p8e0_4xi8(memref<4xi8>, memref<4xi8>, memref<4xi8>) -> ()
+ 
+ 
+-static func::FuncOp getOrCreatePositAddFunc(ModuleOp module, MemRefType memrefTy,
+-                                            unsigned nbits, unsigned es) {
++
++// [new MOD] 使用 rank-based、dynamic-shape 的 runtime 函式命名，
++// 避免 MNIST 這種 model 因為 shape 太多而需要產生一堆 C wrapper。
++static func::FuncOp getOrCreatePositBinaryF32Func(ModuleOp module,
++                                                  const std::string &opName,
++                                                  int64_t rank,
++                                                  unsigned nbits,
++                                                  unsigned es) {
+   OpBuilder b(module.getBodyRegion());
+-  std::string name = "posit_add_p" + std::to_string(nbits) + "e" +
+-                     std::to_string(es) + "_";
+-  // 把 shape 也編進名字，避免不同 shape 卻共用同名造成 signature 不一致
+-  for (int64_t d : memrefTy.getShape()) {
+-    name += std::to_string(d) + "x";
+-  }
+-  name += "i" + std::to_string(nbits);
++  std::string name = "posit_" + opName + "_f32_p" + std::to_string(nbits) + "e" +
++                     std::to_string(es) + "_r" + std::to_string(rank);
+ 
+   if (auto f = module.lookupSymbol<func::FuncOp>(name))
+     return f;
+ 
+-  auto fnType = b.getFunctionType({memrefTy, memrefTy, memrefTy}, {});
+-  auto funcOp = b.create<func::FuncOp>(module.getLoc(), name, fnType);
+-  funcOp.setPrivate(); // runtime function
+-  return funcOp;
++  SmallVector<int64_t, 4> dynShape(rank, ShapedType::kDynamic);
++  auto memrefF32Dyn = MemRefType::get(dynShape, b.getF32Type());
++
++  auto funcType = b.getFunctionType({memrefF32Dyn, memrefF32Dyn, memrefF32Dyn}, {});
++  auto func = b.create<func::FuncOp>(module.getLoc(), name, funcType);
++  func.setPrivate();
++  return func;
+ }
+ 
+ 
+@@ -91,33 +97,162 @@                                 ConversionPatternRewriter &rewriter) const override {
+     Location loc = op.getLoc();
+ 
++    // [new MOD] 這裡的 posit.add 介面維持 tensor<f32>（或 tensor<...xf32>），
++    // 但 runtime 內部會做：f32 -> posit(8,0) -> 運算 -> f32。
++    Type outType = op.getType();
++    Type converted = getTypeConverter()->convertType(outType);
++    auto outTy = llvm::dyn_cast_or_null<MemRefType>(converted);
++    if (!outTy)
++      return rewriter.notifyMatchFailure(op, "expected result to convert to memref");
++
++    Value out = rewriter.create<memref::AllocOp>(loc, outTy);
++
++    auto module = op->getParentOfType<ModuleOp>();
++    const unsigned nbits = 8;
++    const unsigned es = 0;
++    const int64_t rank = outTy.getRank();
++
++    func::FuncOp callee =
++        getOrCreatePositBinaryF32Func(module, "add", rank, nbits, es);
++
++    // callee 期待 dynamic-shape memref<?x?x...xf32>，所以需要 memref.cast
++    SmallVector<int64_t, 4> dynShape(rank, ShapedType::kDynamic);
++    auto dynTy = MemRefType::get(dynShape, outTy.getElementType());
++
++    Value lhs = adaptor.getOperands()[0];
++    Value rhs = adaptor.getOperands()[1];
++
++    if (lhs.getType() != dynTy)
++      lhs = rewriter.create<memref::CastOp>(loc, dynTy, lhs); // [new MOD]
++    if (rhs.getType() != dynTy)
++      rhs = rewriter.create<memref::CastOp>(loc, dynTy, rhs); // [new MOD]
++
++    Value outDyn = out;
++    if (outDyn.getType() != dynTy)
++      outDyn = rewriter.create<memref::CastOp>(loc, dynTy, outDyn); // [new MOD]
++
++    rewriter.create<func::CallOp>(loc, callee, ValueRange{lhs, rhs, outDyn});
++    rewriter.replaceOp(op, out);
++    return success();
++  }
++};
++
++
++// [new MOD] PositSubOpLowering
++struct PositSubOpLowering : public OpConversionPattern<posit::SubOp> {
++  using OpConversionPattern<posit::SubOp>::OpConversionPattern;
++
++  LogicalResult matchAndRewrite(posit::SubOp op, OpAdaptor adaptor,
++                                ConversionPatternRewriter &rewriter) const override {
++    Location loc = op.getLoc();
+     Type converted = getTypeConverter()->convertType(op.getType());
+     auto outTy = llvm::dyn_cast_or_null<MemRefType>(converted);
+     if (!outTy)
+-      return rewriter.notifyMatchFailure(op, "expected result type to convert to MemRefType");
+-
+-    // 目前先只支援 static shape
+-    if (!outTy.hasStaticShape())
+-      return rewriter.notifyMatchFailure(op, "only static-shape memref supported for now");
+-
+-    Value lhs = adaptor.getLhs();
+-    Value rhs = adaptor.getRhs();
+-
+-    // allocate output
+-    Value out = rewriter.create<memref::AllocOp>(loc, outTy);
+-
+-    // 取 converter 參數（nbits/es）
+-    auto *tc = static_cast<const PositToKrnlTypeConverter *>(getTypeConverter());
+-    unsigned nbits = tc->getNbits();
+-    unsigned es = tc->getEs();
+-
+-    // declare/get runtime function and call it
+-    ModuleOp module = op->getParentOfType<ModuleOp>();
+-    func::FuncOp callee = getOrCreatePositAddFunc(module, outTy, nbits, es);
+-
+-    rewriter.create<func::CallOp>(loc, callee, ValueRange{lhs, rhs, out});
+-
+-    // replace posit.add result with out memref
++      return rewriter.notifyMatchFailure(op, "expected result to convert to memref");
++    Value out = rewriter.create<memref::AllocOp>(loc, outTy);
++
++    auto module = op->getParentOfType<ModuleOp>();
++    const unsigned nbits = 8;
++    const unsigned es = 0;
++    const int64_t rank = outTy.getRank();
++
++    func::FuncOp callee =
++        getOrCreatePositBinaryF32Func(module, "sub", rank, nbits, es);
++
++    SmallVector<int64_t, 4> dynShape(rank, ShapedType::kDynamic);
++    auto dynTy = MemRefType::get(dynShape, outTy.getElementType());
++
++    Value lhs = adaptor.getOperands()[0];
++    Value rhs = adaptor.getOperands()[1];
++    if (lhs.getType() != dynTy)
++      lhs = rewriter.create<memref::CastOp>(loc, dynTy, lhs); // [new MOD]
++    if (rhs.getType() != dynTy)
++      rhs = rewriter.create<memref::CastOp>(loc, dynTy, rhs); // [new MOD]
++    Value outDyn = out;
++    if (outDyn.getType() != dynTy)
++      outDyn = rewriter.create<memref::CastOp>(loc, dynTy, outDyn); // [new MOD]
++
++    rewriter.create<func::CallOp>(loc, callee, ValueRange{lhs, rhs, outDyn});
++    rewriter.replaceOp(op, out);
++    return success();
++  }
++};
++
++// [new MOD] PositMulOpLowering
++struct PositMulOpLowering : public OpConversionPattern<posit::MulOp> {
++  using OpConversionPattern<posit::MulOp>::OpConversionPattern;
++
++  LogicalResult matchAndRewrite(posit::MulOp op, OpAdaptor adaptor,
++                                ConversionPatternRewriter &rewriter) const override {
++    Location loc = op.getLoc();
++    Type converted = getTypeConverter()->convertType(op.getType());
++    auto outTy = llvm::dyn_cast_or_null<MemRefType>(converted);
++    if (!outTy)
++      return rewriter.notifyMatchFailure(op, "expected result to convert to memref");
++    Value out = rewriter.create<memref::AllocOp>(loc, outTy);
++
++    auto module = op->getParentOfType<ModuleOp>();
++    const unsigned nbits = 8;
++    const unsigned es = 0;
++    const int64_t rank = outTy.getRank();
++
++    func::FuncOp callee =
++        getOrCreatePositBinaryF32Func(module, "mul", rank, nbits, es);
++
++    SmallVector<int64_t, 4> dynShape(rank, ShapedType::kDynamic);
++    auto dynTy = MemRefType::get(dynShape, outTy.getElementType());
++
++    Value lhs = adaptor.getOperands()[0];
++    Value rhs = adaptor.getOperands()[1];
++    if (lhs.getType() != dynTy)
++      lhs = rewriter.create<memref::CastOp>(loc, dynTy, lhs); // [new MOD]
++    if (rhs.getType() != dynTy)
++      rhs = rewriter.create<memref::CastOp>(loc, dynTy, rhs); // [new MOD]
++    Value outDyn = out;
++    if (outDyn.getType() != dynTy)
++      outDyn = rewriter.create<memref::CastOp>(loc, dynTy, outDyn); // [new MOD]
++
++    rewriter.create<func::CallOp>(loc, callee, ValueRange{lhs, rhs, outDyn});
++    rewriter.replaceOp(op, out);
++    return success();
++  }
++};
++
++// [new MOD] PositDivOpLowering
++struct PositDivOpLowering : public OpConversionPattern<posit::DivOp> {
++  using OpConversionPattern<posit::DivOp>::OpConversionPattern;
++
++  LogicalResult matchAndRewrite(posit::DivOp op, OpAdaptor adaptor,
++                                ConversionPatternRewriter &rewriter) const override {
++    Location loc = op.getLoc();
++    Type converted = getTypeConverter()->convertType(op.getType());
++    auto outTy = llvm::dyn_cast_or_null<MemRefType>(converted);
++    if (!outTy)
++      return rewriter.notifyMatchFailure(op, "expected result to convert to memref");
++    Value out = rewriter.create<memref::AllocOp>(loc, outTy);
++
++    auto module = op->getParentOfType<ModuleOp>();
++    const unsigned nbits = 8;
++    const unsigned es = 0;
++    const int64_t rank = outTy.getRank();
++
++    func::FuncOp callee =
++        getOrCreatePositBinaryF32Func(module, "div", rank, nbits, es);
++
++    SmallVector<int64_t, 4> dynShape(rank, ShapedType::kDynamic);
++    auto dynTy = MemRefType::get(dynShape, outTy.getElementType());
++
++    Value lhs = adaptor.getOperands()[0];
++    Value rhs = adaptor.getOperands()[1];
++    if (lhs.getType() != dynTy)
++      lhs = rewriter.create<memref::CastOp>(loc, dynTy, lhs); // [new MOD]
++    if (rhs.getType() != dynTy)
++      rhs = rewriter.create<memref::CastOp>(loc, dynTy, rhs); // [new MOD]
++    Value outDyn = out;
++    if (outDyn.getType() != dynTy)
++      outDyn = rewriter.create<memref::CastOp>(loc, dynTy, outDyn); // [new MOD]
++
++    rewriter.create<func::CallOp>(loc, callee, ValueRange{lhs, rhs, outDyn});
+     rewriter.replaceOp(op, out);
+     return success();
+   }
+@@ -128,7 +263,8 @@ void populatePositToKrnlConversionPattern(TypeConverter &typeConverter,
+                                          RewritePatternSet &patterns,
+                                          MLIRContext *ctx) {
+-  patterns.add<PositConstantOpLowering, PositAddOpLowering>(typeConverter, ctx);
++  patterns.add<PositConstantOpLowering, PositAddOpLowering,
++               PositSubOpLowering, PositMulOpLowering, PositDivOpLowering>(typeConverter, ctx); // [new MOD]
+ }
+ 
+ } // namespace onnx_mlir--- TypeConverters_krnl.cpp+++ TypeConverters_krnl.cpp@@ -42,6 +42,27 @@   return convertPositScalarToIType(t, nbits, ctx);
+ }
+ 
++
++// [new MOD] 讓 posit.* op 也能直接吃 tensor<f32>/tensor<i32> 之類的介面，
++// 在 lowering 時把 tensor 轉成 memref（只會影響被我們 rewrite 的 posit ops）。
++static Type convertPlainTensorToMemref(Type t, MLIRContext *ctx) {
++  if (auto ranked = llvm::dyn_cast<RankedTensorType>(t)) {
++    Type elem = ranked.getElementType();
++    if (llvm::isa<FloatType>(elem) || llvm::isa<IntegerType>(elem)) {
++      return MemRefType::get(ranked.getShape(), elem, {}, /*memorySpace=*/0);
++    }
++    return t;
++  }
++  if (auto unranked = llvm::dyn_cast<UnrankedTensorType>(t)) {
++    Type elem = unranked.getElementType();
++    if (llvm::isa<FloatType>(elem) || llvm::isa<IntegerType>(elem)) {
++      return UnrankedMemRefType::get(elem, /*memorySpace=*/0);
++    }
++    return t;
++  }
++  return t;
++}
++
+ PositToKrnlTypeConverter::PositToKrnlTypeConverter(unsigned nbits, unsigned es,
+                                                    MLIRContext *ctx)
+     : nbits_(nbits), es_(es) {
+@@ -52,6 +73,9 @@   addConversion([nbits, ctx](Type t) {
+     return convertPositTensorToMemref(t, nbits, ctx);
+   });
++
++  // [new MOD] 同時支援 tensor<f32>/tensor<i*> 介面的 posit.* op
++  addConversion([ctx](Type t) { return convertPlainTensorToMemref(t, ctx); });
+ 
+   // materialization：用 unrealized_conversion_cast 先橋接型別落差
+   auto makeCast = [](OpBuilder &b, Type dst, ValueRange inputs,
+--- posit_runtime.cpp+++ posit_runtime.cpp@@ -4,6 +4,7 @@ 
+ #include <cstdint>
+ #include <cstdio>
++#include <array> // [new MOD]
+ #include "mlir/ExecutionEngine/CRunnerUtils.h"
+ 
+ // MLIR 會生成並呼叫這個 C 介面 wrapper：_mlir_ciface_posit_add_p8e0_4xi8
+@@ -47,3 +48,76 @@ 
+   std::fflush(stdout);
+ }
++
++
++// [new MOD] ================================================================
++// f32 <-> posit(8,0) (p8e0) 的 "Q/DQ" 在 runtime wrapper 內完成：
++//   Q:  float -> posit8_t  (convertDoubleToP8)
++//   Op: p8_add / p8_sub / p8_mul / p8_div
++//   DQ: posit8_t -> float  (convertP8ToDouble)
++// 這樣 IR 端仍然維持 tensor<f32>，但算術是在 posit domain 做完再回到 f32。
++// ==========================================================================
++
++template <int Rank, typename Kernel>
++static inline void loopOverStridedMemRef(StridedMemRefType<float, Rank> *A,
++                                         StridedMemRefType<float, Rank> *B,
++                                         StridedMemRefType<float, Rank> *Out,
++                                         Kernel &&kernel) {
++  float *a = A->data + A->offset;
++  float *b = B->data + B->offset;
++  float *o = Out->data + Out->offset;
++
++  // 遞迴展開 N 維 index
++  std::array<int64_t, Rank> idx{};
++
++  // lambda recursion (C++14)
++  auto rec = [&](auto &&self, int dim, int64_t offA, int64_t offB,
++                 int64_t offO) -> void {
++    if (dim == Rank) {
++      kernel(a[offA], b[offB], o[offO]);
++      return;
++    }
++    int64_t sz = Out->sizes[dim];
++    int64_t sA = A->strides[dim];
++    int64_t sB = B->strides[dim];
++    int64_t sO = Out->strides[dim];
++    for (int64_t i = 0; i < sz; ++i) {
++      self(self, dim + 1, offA + i * sA, offB + i * sB, offO + i * sO);
++    }
++  };
++
++  rec(rec, 0, 0, 0, 0);
++}
++
++#define DEFINE_P8E0_BINARY_F32_WRAPPER(OPNAME, P8FUNC, RANK)                 \
++  extern "C" void _mlir_ciface_posit_##OPNAME##_f32_p8e0_r##RANK(            \
++      StridedMemRefType<float, RANK> *A, StridedMemRefType<float, RANK> *B,  \
++      StridedMemRefType<float, RANK> *Out) {                                 \
++    loopOverStridedMemRef<RANK>(                                             \
++        A, B, Out, [](float av, float bv, float &ov) {                       \
++          posit8_t ap = convertDoubleToP8(static_cast<double>(av));          \
++          posit8_t bp = convertDoubleToP8(static_cast<double>(bv));          \
++          posit8_t rp = P8FUNC(ap, bp);                                      \
++          ov = static_cast<float>(convertP8ToDouble(rp));                    \
++        });                                                                  \
++  }
++
++// rank-1/2/4：MNIST 常見張量（bias add / residual / elementwise）會出現的 rank。
++DEFINE_P8E0_BINARY_F32_WRAPPER(add, p8_add, 1) // [new MOD]
++DEFINE_P8E0_BINARY_F32_WRAPPER(add, p8_add, 2) // [new MOD]
++DEFINE_P8E0_BINARY_F32_WRAPPER(add, p8_add, 4) // [new MOD]
++
++DEFINE_P8E0_BINARY_F32_WRAPPER(sub, p8_sub, 1) // [new MOD]
++DEFINE_P8E0_BINARY_F32_WRAPPER(sub, p8_sub, 2) // [new MOD]
++DEFINE_P8E0_BINARY_F32_WRAPPER(sub, p8_sub, 4) // [new MOD]
++
++DEFINE_P8E0_BINARY_F32_WRAPPER(mul, p8_mul, 1) // [new MOD]
++DEFINE_P8E0_BINARY_F32_WRAPPER(mul, p8_mul, 2) // [new MOD]
++DEFINE_P8E0_BINARY_F32_WRAPPER(mul, p8_mul, 4) // [new MOD]
++
++DEFINE_P8E0_BINARY_F32_WRAPPER(div, p8_div, 1) // [new MOD]
++DEFINE_P8E0_BINARY_F32_WRAPPER(div, p8_div, 2) // [new MOD]
++DEFINE_P8E0_BINARY_F32_WRAPPER(div, p8_div, 4) // [new MOD]
++
++#undef DEFINE_P8E0_BINARY_F32_WRAPPER
++

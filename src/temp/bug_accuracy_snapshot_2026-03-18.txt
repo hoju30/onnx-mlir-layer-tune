@@ -1,0 +1,97 @@
+Snapshot date: 2026-03-18 09:53:34 +0800
+Range checked: 2026-03-13 (Fri) to 2026-03-18
+
+[Source] fix log
+- /home/lai/mlir_toy/onnx-mlir/src/posit_mobilenet_resnet_fix_log.md
+155:## 2026-03-16: No-Int8-QDQ Path Stabilization
+193:## 2026-03-16: p8e0 SO Rebuild + Fractional Q-Domain Update
+229:  - run completed successfully (no segfault / no missing main symbol).
+231:## 2026-03-16: Reduce f32<->posit Ping-Pong (Keep Needed Low-Precision Sections)
+242:  - before tweak: `from=169`, `to=100`, local ping-pong pairs (`to->from` within ~12 lines) = `63`
+243:  - naive partial-convert attempt: `from=236`, `to=167`, ping-pong=`91`
+264:  - local ping-pong pairs: `63 -> 27`
+274:## 2026-03-17: Apply focus fixes #3/#4/#5 (no mixed-precision)
+318:  - `p32e2`: no valid sample parsed in this run (`rc=143`, manually terminated due very long runtime)
+
+[Source] mobilenet limit=1 after345
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/mobilenet11_temp/p8e0_limit1_after345.log
+17:=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+25:  C1 target=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p8e0.so N=1000 MAE=3.78038 RMSE=4.7489 MaxAbs=14.5961 RMAE=6.80271 Cosine=0.105107 JS=0.68649 Top1(4,0)=diff Top5Overlap=0 LatencyRatio=941.488x
+34:  avg_latency_us=56144700
+37:  MAE=3.78038 RMSE=4.7489 MaxAbs=14.5961 Cosine=0.105107 RMAE=6.80271 JS=0.68649 Top1Match(%)=0 Top5Overlap=0
+38:  GT Top1(%)=0 Top5(%)=0
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/mobilenet11_temp/p16e1_limit1_after345.log
+17:=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+25:  C1 target=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so N=1000 MAE=0.834083 RMSE=1.06894 MaxAbs=3.95213 RMAE=1.98165 Cosine=0.945847 JS=0.00408214 Top1(0,0)=match Top5Overlap=3 LatencyRatio=2436.89x
+34:  avg_latency_us=145731000
+37:  MAE=0.834083 RMSE=1.06894 MaxAbs=3.95213 Cosine=0.945847 RMAE=1.98165 JS=0.00408214 Top1Match(%)=100 Top5Overlap=3
+38:  GT Top1(%)=100 Top5(%)=100
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/mobilenet11_temp/p32e2_limit1_after345.log
+17:=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+25:  C1 target=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p32e2.so N=1000 MAE=0.740566 RMSE=0.940695 MaxAbs=3.03662 RMAE=3.21541 Cosine=0.951984 JS=0.00142429 Top1(0,0)=match Top5Overlap=4 LatencyRatio=5677.94x
+34:  avg_latency_us=332859000
+37:  MAE=0.740566 RMSE=0.940695 MaxAbs=3.03662 Cosine=0.951984 RMAE=3.21541 JS=0.00142429 Top1Match(%)=100 Top5Overlap=4
+38:  GT Top1(%)=100 Top5(%)=100
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/mobilenet11_temp/qdq-f32_limit1_after345.log
+17:=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+25:  C1 target=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-f32.so N=1000 MAE=0.727712 RMSE=0.928991 MaxAbs=3.55975 RMAE=3.01588 Cosine=0.952258 JS=0.00218804 Top1(0,0)=match Top5Overlap=4 LatencyRatio=1.81674x
+34:  avg_latency_us=97922.8
+37:  MAE=0.727712 RMSE=0.928991 MaxAbs=3.55975 Cosine=0.952258 RMAE=3.01588 JS=0.00218804 Top1Match(%)=100 Top5Overlap=4
+38:  GT Top1(%)=100 Top5(%)=100
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/mobilenet11_temp/nqdq-f32_limit1_after345.log
+16:=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+29:  avg_latency_us=60899.2
+31:  GT Top1(%)=100 Top5(%)=100
+
+[Source] resnet limit=1 after345
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/resnet50-11_temp/p8e0_limit1_after345.log
+17:=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+25:  C1 target=f32 so=./temp/resnet50-11_temp/resnet50-v1-12-qdq-p8e0.so N=1000 MAE=1.85897 RMSE=2.53246 MaxAbs=18.8521 RMAE=8.0698 Cosine=0.0240584 JS=0.691559 Top1(999,0)=diff Top5Overlap=0 LatencyRatio=119.61x
+34:  avg_latency_us=291755000
+37:  MAE=1.85897 RMSE=2.53246 MaxAbs=18.8521 Cosine=0.0240584 RMAE=8.0698 JS=0.691559 Top1Match(%)=0 Top5Overlap=0
+38:  GT Top1(%)=0 Top5(%)=0
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/resnet50-11_temp/p16e1_limit1_after345.log
+17:=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+25:  C1 target=f32 so=./temp/resnet50-11_temp/resnet50-v1-12-qdq-p16e1.so N=1000 MAE=0.213761 RMSE=0.269741 MaxAbs=0.931381 RMAE=0.543045 Cosine=0.991584 JS=8.76844e-05 Top1(0,0)=match Top5Overlap=5 LatencyRatio=405.639x
+34:  avg_latency_us=984941000
+37:  MAE=0.213761 RMSE=0.269741 MaxAbs=0.931381 Cosine=0.991584 RMAE=0.543045 JS=8.76844e-05 Top1Match(%)=100 Top5Overlap=5
+38:  GT Top1(%)=100 Top5(%)=100
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/resnet50-11_temp/qdq-f32_limit1_after345.log
+17:=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+25:  C1 target=f32 so=./temp/resnet50-11_temp/resnet50-v1-12-qdq-f32.so N=1000 MAE=0.228681 RMSE=0.287747 MaxAbs=1.0203 RMAE=0.646279 Cosine=0.99031 JS=8.43661e-05 Top1(0,0)=match Top5Overlap=5 LatencyRatio=1.0451x
+34:  avg_latency_us=2424910
+37:  MAE=0.228681 RMSE=0.287747 MaxAbs=1.0203 Cosine=0.99031 RMAE=0.646279 JS=8.43661e-05 Top1Match(%)=100 Top5Overlap=5
+38:  GT Top1(%)=100 Top5(%)=100
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/resnet50-11_temp/nqdq-f32_limit1_after345.log
+16:=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+29:  avg_latency_us=2365060
+31:  GT Top1(%)=100 Top5(%)=100
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/resnet50-11_temp/p32e2_limit1_after345.log
+17:=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=143 ===
+19:[hint] rc=143 SIGTERM for sample=./temp/imagenette_val_224/img_00000.txt
+20:[first-fail] sample=./temp/imagenette_val_224/img_00000.txt rc=143
+
+[Source] old/worse p8e0 drift/logit summaries
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/logit_diff_p8e0_vs_qdqf32/summary.txt
+N=1000
+MAE=2.498289089
+RMSE=3.218733378
+MaxAbs=15.64472485
+Cosine=0.01417212469
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/logit_diff_mobilenet_p8e0_int8/summary.txt
+N=1000
+MAE=2.355693536
+RMSE=3.026792171
+MaxAbs=15.59784985
+Cosine=0.05665780809
+---- /home/lai/mlir_toy/onnx-mlir/src/temp/layer_drift_mobilenet_noproxy/summary.txt
+Final logits compare: p8e0 vs nqdq-f32
+N=1000
+MAE=4.518086261
+RMSE=5.410066471
+MaxAbs=15.80529213
+Cosine=0.107315961
+Top1(p8,ref)=(457,0)
+Top5Overlap=0
+PTRACE_rows=207
+PTRACE_csv=./temp/layer_drift_mobilenet_noproxy/p8_layer_trace.csv

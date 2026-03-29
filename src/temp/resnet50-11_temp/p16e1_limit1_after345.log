@@ -1,0 +1,39 @@
+time_model_single_format config
+  model_name=resnet50-v1-12
+  format=p16e1
+  target_so=./temp/resnet50-11_temp/resnet50-v1-12-qdq-p16e1.so
+  target_type=f32
+  txt_dir=./temp/imagenette_val_224
+  limit=1
+  shape=1x3x224x224
+  warmup=0
+  iters=1
+  timeout_sec=0
+  baseline=nqdq-f32
+  baseline_so=./temp/resnet50-11_temp/resnet50-v1-12-nqdq-f32.so
+  label_map=./temp/imagenette_val_224_labels.txt
+  mode=no-benchmark
+
+=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+MAIN type=f32 avg=9.84941e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,758,764,391]
+  label=0 top1_hit=yes top5_hit=yes
+CMP#1 type=f32 avg=2.42812e+06 us so=./temp/resnet50-11_temp/resnet50-v1-12-nqdq-f32.so
+  top1=0 top5=[0,389,758,764,391]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/resnet50-11_temp/resnet50-v1-12-nqdq-f32.so
+  C1 target=f32 so=./temp/resnet50-11_temp/resnet50-v1-12-qdq-p16e1.so N=1000 MAE=0.213761 RMSE=0.269741 MaxAbs=0.931381 RMAE=0.543045 Cosine=0.991584 JS=8.76844e-05 Top1(0,0)=match Top5Overlap=5 LatencyRatio=405.639x
+
+[progress] 1/1
+
+Summary
+  target=resnet50-v1-12-p16e1
+  samples_used=1
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=984941000
+  total_wall_time_sec=987.489
+  baseline=nqdq-f32
+  MAE=0.213761 RMSE=0.269741 MaxAbs=0.931381 Cosine=0.991584 RMAE=0.543045 JS=8.76844e-05 Top1Match(%)=100 Top5Overlap=5
+  GT Top1(%)=100 Top5(%)=100
+  log_file=./temp/resnet50-11_temp/p16e1_limit1_after345.log

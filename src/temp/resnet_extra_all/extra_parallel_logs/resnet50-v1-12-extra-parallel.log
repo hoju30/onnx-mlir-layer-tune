@@ -1,0 +1,97 @@
+[config] model=resnet50-v1-12
+[config] out_dir=./temp/resnet_extra_all/
+[config] txt_dir=./temp/imagenette_val_224
+[config] jobs=5 limit=10 warmup=0 iters=1
+[config] baseline=none (requested=auto)
+[config] formats=p4e0 p4e1 p4e2 p4e3 p5e0 p5e1 p5e2 p5e3 p6e0 p6e1 p6e2 p6e3 p7e0 p7e1 p7e2 p7e3 p9e0 p9e1 p9e2 p9e3
+[config] logs=./temp/resnet_extra_all//extra_parallel_logs
+[config] master_log=./temp/resnet_extra_all//extra_parallel_logs/resnet50-v1-12-extra-parallel.log
+[launch] p4e0
+[launch] p4e1
+[launch] p4e2
+[launch] p4e3
+[launch] p5e0
+[launch] p5e1
+[launch] p5e2
+[launch] p5e3
+[launch] p6e0
+[launch] p6e1
+[launch] p6e2
+[launch] p6e3
+[launch] p7e0
+[launch] p7e1
+[launch] p7e2
+[launch] p7e3
+[launch] p9e0
+[launch] p9e1
+[launch] p9e2
+[launch] p9e3
+[done] p4e0 rc=0
+[done] p4e1 rc=0
+[done] p4e2 rc=0
+[done] p4e3 rc=0
+[done] p5e0 rc=0
+[done] p5e1 rc=0
+[done] p5e2 rc=0
+[done] p5e3 rc=0
+[done] p6e0 rc=0
+[done] p6e1 rc=0
+[done] p6e2 rc=0
+[done] p6e3 rc=0
+[done] p7e0 rc=0
+[done] p7e1 rc=0
+[done] p7e2 rc=0
+[done] p7e3 rc=0
+[done] p9e0 rc=0
+[done] p9e1 rc=0
+[done] p9e2 rc=0
+[done] p9e3 rc=0
+
+Summary (resnet50 extra formats)
+format   rc   lat_us       Top1(%)    Top5Ov     MAE        Cosine    
+p4e0     0    142752200    -          -          -          -         
+p4e1     0    161220000    -          -          -          -         
+p4e2     0    150551100    -          -          -          -         
+p4e3     0    145008900    -          -          -          -         
+p5e0     0    142947500    -          -          -          -         
+p5e1     0    163854300    -          -          -          -         
+p5e2     0    160121800    -          -          -          -         
+p5e3     0    147256500    -          -          -          -         
+p6e0     0    165095500    -          -          -          -         
+p6e1     0    177859200    -          -          -          -         
+p6e2     0    180866200    -          -          -          -         
+p6e3     0    167367700    -          -          -          -         
+p7e0     0    173614300    -          -          -          -         
+p7e1     0    202277700    -          -          -          -         
+p7e2     0    202492200    -          -          -          -         
+p7e3     0    209422100    -          -          -          -         
+p9e0     0    221032800    -          -          -          -         
+p9e1     0    256317300    -          -          -          -         
+p9e2     0    269538600    -          -          -          -         
+p9e3     0    273521600    -          -          -          -         
+
+Summary (resnet50 extra formats, GT)
+format   rc   lat_us       GT Top1(%)   GT Top5(%)  
+p4e0     0    142752200    70           100         
+p4e1     0    161220000    0            0           
+p4e2     0    150551100    0            0           
+p4e3     0    145008900    0            0           
+p5e0     0    142947500    0            0           
+p5e1     0    163854300    0            0           
+p5e2     0    160121800    10           30          
+p5e3     0    147256500    0            0           
+p6e0     0    165095500    0            0           
+p6e1     0    177859200    100          100         
+p6e2     0    180866200    80           80          
+p6e3     0    167367700    10           10          
+p7e0     0    173614300    0            0           
+p7e1     0    202277700    100          100         
+p7e2     0    202492200    100          100         
+p7e3     0    209422100    80           80          
+p9e0     0    221032800    100          100         
+p9e1     0    256317300    100          100         
+p9e2     0    269538600    100          100         
+p9e3     0    273521600    100          100         
+
+Per-format logs:
+  ./temp/resnet_extra_all//extra_parallel_logs

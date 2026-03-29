@@ -1,0 +1,29 @@
+time_model_single_format config
+  model_name=resnet50-v1-12
+  format=p16e1
+  target_so=./temp/resnet50-11_temp/resnet50-v1-12-qdq-p16e1.so
+  target_type=f32
+  txt_dir=./temp/imagenette_val_224
+  limit=100
+  shape=1x3x224x224
+  warmup=0
+  iters=1
+  timeout_sec=0
+  baseline=none
+  label_map=./temp/imagenette_val_224_labels.txt
+  mode=no-benchmark
+
+=== sample[1/100] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+MAIN type=f32 avg=1.83492e+09 us (iters=1, warmup=0)
+  top1=600 top5=[600,911,731,898,883]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/resnet50-11_temp/resnet50-v1-12-qdq-p16e1.so
+
+[progress] 1/100
+=== sample[2/100] ./temp/imagenette_val_224/img_00001.txt rc=0 ===
+MAIN type=f32 avg=1.85013e+09 us (iters=1, warmup=0)
+  top1=600 top5=[600,523,902,731,898]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/resnet50-11_temp/resnet50-v1-12-qdq-p16e1.so
+
+[progress] 2/100

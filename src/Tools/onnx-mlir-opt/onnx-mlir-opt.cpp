@@ -44,6 +44,11 @@
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Version/Version.hpp"
 
+// new 
+#include "src/Dialect/Posit/PositDialect.h"
+#include "src/Dialect/Posit/PositPasses.h"
+#include "src/Dialect/Posit/PositOps.h"
+
 using namespace mlir;
 using namespace onnx_mlir;
 
@@ -139,8 +144,11 @@ int main(int argc, char **argv) {
   removeUnrelatedOptions({&OnnxMlirCommonOptions, &OnnxMlirOptOptions});
 
   DialectRegistry registry = registerDialects(maccel);
-  registry.insert<tosa::TosaDialect>();
-
+  registry.insert<tosa::TosaDialect,
+  	mlir::posit::PositDialect,
+        mlir::func::FuncDialect,
+        mlir::arith::ArithDialect>();
+  //new
   bufferization::registerBufferizationPipelines();
 
   // Registered passes can be expressed as command line flags, so they must

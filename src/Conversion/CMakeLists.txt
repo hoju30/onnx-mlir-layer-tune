@@ -6,6 +6,10 @@ add_subdirectory(KrnlToLLVM)
 add_subdirectory(KrnlToAffine)
 add_subdirectory(KrnlSeqToMemref)
 add_subdirectory(ONNXToTOSA)
+# 11/13
+add_subdirectory(ONNXToPosit)
+# 12/17 posit to krnl
+add_subdirectory(PositToKrnl)
 
 if (ONNX_MLIR_ENABLE_STABLEHLO)
   add_subdirectory(ONNXToStablehlo)

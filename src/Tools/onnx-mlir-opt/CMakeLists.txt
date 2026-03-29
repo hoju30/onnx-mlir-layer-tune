@@ -19,4 +19,15 @@ add_onnx_mlir_executable(onnx-mlir-opt
   MLIROpenMPToLLVM
   MLIROptLib
   MLIRSCFToOpenMP
+
   )
+
+# 11/13
+target_link_libraries(onnx-mlir-opt PUBLIC
+  OMONNXToPosit      # ONNX to Posit pass
+  OMPositOps         # Posit dialect
+  OMPositToKrnl      # Posit to Krnl pass
+  softposit          # softposit
+)
+
+message(STATUS "test run this cmake")

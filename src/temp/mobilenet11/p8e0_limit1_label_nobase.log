@@ -1,0 +1,31 @@
+time_model_single_format config
+  model_name=mobilenetv2-12
+  format=p8e0
+  target_so=./temp/mobilenet11/mobilenetv2-12-qdq-p8e0.so
+  target_type=p8e0
+  txt_dir=./temp/imagenette_val_224
+  limit=1
+  shape=1x3x224x224
+  warmup=0
+  iters=1
+  timeout_sec=0
+  baseline=none
+  label_map=./temp/imagenette_val_224_labels.txt
+  mode=no-benchmark
+
+=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+MAIN type=p8e0 avg=5.55463e+07 us (iters=1, warmup=0)
+  top1=885 top5=[885,646,111,423,281]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=p8e0 so=./temp/mobilenet11/mobilenetv2-12-qdq-p8e0.so
+
+
+Summary
+  target=mobilenetv2-12-p8e0
+  samples_used=1
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=55546300
+  total_wall_time_sec=55.6501
+  GT Top1(%)=0 Top5(%)=0
+  log_file=./temp/mobilenet11/p8e0_limit1_label_nobase.log

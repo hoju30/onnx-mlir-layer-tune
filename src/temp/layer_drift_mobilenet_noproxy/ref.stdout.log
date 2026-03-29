@@ -1,0 +1,3 @@
+MAIN type=f32 avg=60175.1 us (iters=1, warmup=0)
+  top1=0 top5=[0,764,389,150,758]
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-nqdq-f32.so

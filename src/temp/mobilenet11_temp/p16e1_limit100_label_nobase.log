@@ -1,0 +1,725 @@
+time_model_single_format config
+  model_name=mobilenetv2-12
+  format=p16e1
+  target_so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+  target_type=f32
+  txt_dir=./temp/imagenette_val_224
+  limit=100
+  shape=1x3x224x224
+  warmup=0
+  iters=1
+  timeout_sec=0
+  baseline=none
+  label_map=./temp/imagenette_val_224_labels.txt
+  mode=no-benchmark
+
+=== sample[1/100] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+MAIN type=f32 avg=1.84556e+08 us (iters=1, warmup=0)
+  top1=733 top5=[733,836,837,633,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 1/100
+=== sample[2/100] ./temp/imagenette_val_224/img_00001.txt rc=0 ===
+MAIN type=f32 avg=1.84127e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,633,733,836,419]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 2/100
+=== sample[3/100] ./temp/imagenette_val_224/img_00002.txt rc=0 ===
+MAIN type=f32 avg=1.8783e+08 us (iters=1, warmup=0)
+  top1=836 top5=[836,837,733,633,636]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 3/100
+=== sample[4/100] ./temp/imagenette_val_224/img_00003.txt rc=0 ===
+MAIN type=f32 avg=1.8556e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 4/100
+=== sample[5/100] ./temp/imagenette_val_224/img_00004.txt rc=0 ===
+MAIN type=f32 avg=1.83706e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,633,836,733,678]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 5/100
+=== sample[6/100] ./temp/imagenette_val_224/img_00005.txt rc=0 ===
+MAIN type=f32 avg=1.8343e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,633,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 6/100
+=== sample[7/100] ./temp/imagenette_val_224/img_00006.txt rc=0 ===
+MAIN type=f32 avg=1.83329e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,447,633,733]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 7/100
+=== sample[8/100] ./temp/imagenette_val_224/img_00007.txt rc=0 ===
+MAIN type=f32 avg=1.83486e+08 us (iters=1, warmup=0)
+  top1=7 top5=[7,840,134,862,429]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 8/100
+=== sample[9/100] ./temp/imagenette_val_224/img_00008.txt rc=0 ===
+MAIN type=f32 avg=1.82203e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,633,636]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 9/100
+=== sample[10/100] ./temp/imagenette_val_224/img_00009.txt rc=0 ===
+MAIN type=f32 avg=1.81999e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,812,701,555]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 10/100
+=== sample[11/100] ./temp/imagenette_val_224/img_00010.txt rc=0 ===
+MAIN type=f32 avg=1.8166e+08 us (iters=1, warmup=0)
+  top1=633 top5=[633,837,836,733,419]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 11/100
+=== sample[12/100] ./temp/imagenette_val_224/img_00011.txt rc=0 ===
+MAIN type=f32 avg=1.82409e+08 us (iters=1, warmup=0)
+  top1=812 top5=[812,447,862,752,837]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 12/100
+=== sample[13/100] ./temp/imagenette_val_224/img_00012.txt rc=0 ===
+MAIN type=f32 avg=1.83766e+08 us (iters=1, warmup=0)
+  top1=862 top5=[862,265,7,181,812]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 13/100
+=== sample[14/100] ./temp/imagenette_val_224/img_00013.txt rc=0 ===
+MAIN type=f32 avg=1.81037e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,733,419]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 14/100
+=== sample[15/100] ./temp/imagenette_val_224/img_00014.txt rc=0 ===
+MAIN type=f32 avg=1.82212e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 15/100
+=== sample[16/100] ./temp/imagenette_val_224/img_00015.txt rc=0 ===
+MAIN type=f32 avg=1.81926e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,733,836,633,459]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 16/100
+=== sample[17/100] ./temp/imagenette_val_224/img_00016.txt rc=0 ===
+MAIN type=f32 avg=1.81023e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,733,633,836,419]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 17/100
+=== sample[18/100] ./temp/imagenette_val_224/img_00017.txt rc=0 ===
+MAIN type=f32 avg=1.81918e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 18/100
+=== sample[19/100] ./temp/imagenette_val_224/img_00018.txt rc=0 ===
+MAIN type=f32 avg=1.84527e+08 us (iters=1, warmup=0)
+  top1=862 top5=[862,265,7,852,812]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 19/100
+=== sample[20/100] ./temp/imagenette_val_224/img_00019.txt rc=0 ===
+MAIN type=f32 avg=1.8157e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,633,678]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 20/100
+=== sample[21/100] ./temp/imagenette_val_224/img_00020.txt rc=0 ===
+MAIN type=f32 avg=1.80403e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,733,836,633,459]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 21/100
+=== sample[22/100] ./temp/imagenette_val_224/img_00021.txt rc=0 ===
+MAIN type=f32 avg=1.81521e+08 us (iters=1, warmup=0)
+  top1=447 top5=[447,836,837,487,633]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 22/100
+=== sample[23/100] ./temp/imagenette_val_224/img_00022.txt rc=0 ===
+MAIN type=f32 avg=1.83433e+08 us (iters=1, warmup=0)
+  top1=733 top5=[733,837,836,487,633]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 23/100
+=== sample[24/100] ./temp/imagenette_val_224/img_00023.txt rc=0 ===
+MAIN type=f32 avg=1.8171e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,733,836,633,678]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 24/100
+=== sample[25/100] ./temp/imagenette_val_224/img_00024.txt rc=0 ===
+MAIN type=f32 avg=1.81697e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,633,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 25/100
+=== sample[26/100] ./temp/imagenette_val_224/img_00025.txt rc=0 ===
+MAIN type=f32 avg=1.81523e+08 us (iters=1, warmup=0)
+  top1=812 top5=[812,752,795,862,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 26/100
+=== sample[27/100] ./temp/imagenette_val_224/img_00026.txt rc=0 ===
+MAIN type=f32 avg=1.81949e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,447,733,701]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 27/100
+=== sample[28/100] ./temp/imagenette_val_224/img_00027.txt rc=0 ===
+MAIN type=f32 avg=1.81077e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,633,459]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 28/100
+=== sample[29/100] ./temp/imagenette_val_224/img_00028.txt rc=0 ===
+MAIN type=f32 avg=1.82546e+08 us (iters=1, warmup=0)
+  top1=836 top5=[836,837,633,447,733]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 29/100
+=== sample[30/100] ./temp/imagenette_val_224/img_00029.txt rc=0 ===
+MAIN type=f32 avg=1.8244e+08 us (iters=1, warmup=0)
+  top1=733 top5=[733,837,836,633,459]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 30/100
+=== sample[31/100] ./temp/imagenette_val_224/img_00030.txt rc=0 ===
+MAIN type=f32 avg=1.8123e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,633,459]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 31/100
+=== sample[32/100] ./temp/imagenette_val_224/img_00031.txt rc=0 ===
+MAIN type=f32 avg=1.80961e+08 us (iters=1, warmup=0)
+  top1=733 top5=[733,837,836,419,633]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 32/100
+=== sample[33/100] ./temp/imagenette_val_224/img_00032.txt rc=0 ===
+MAIN type=f32 avg=1.8106e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 33/100
+=== sample[34/100] ./temp/imagenette_val_224/img_00033.txt rc=0 ===
+MAIN type=f32 avg=1.82227e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,447,733,636]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 34/100
+=== sample[35/100] ./temp/imagenette_val_224/img_00034.txt rc=0 ===
+MAIN type=f32 avg=1.81755e+08 us (iters=1, warmup=0)
+  top1=733 top5=[733,837,836,633,678]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 35/100
+=== sample[36/100] ./temp/imagenette_val_224/img_00035.txt rc=0 ===
+MAIN type=f32 avg=1.82571e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,733,836,633,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 36/100
+=== sample[37/100] ./temp/imagenette_val_224/img_00036.txt rc=0 ===
+MAIN type=f32 avg=1.8091e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,409,823]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 37/100
+=== sample[38/100] ./temp/imagenette_val_224/img_00037.txt rc=0 ===
+MAIN type=f32 avg=1.82301e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 38/100
+=== sample[39/100] ./temp/imagenette_val_224/img_00038.txt rc=0 ===
+MAIN type=f32 avg=1.81423e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 39/100
+=== sample[40/100] ./temp/imagenette_val_224/img_00039.txt rc=0 ===
+MAIN type=f32 avg=1.81791e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,633,733,836,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 40/100
+=== sample[41/100] ./temp/imagenette_val_224/img_00040.txt rc=0 ===
+MAIN type=f32 avg=1.81784e+08 us (iters=1, warmup=0)
+  top1=864 top5=[864,803,555,812,705]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 41/100
+=== sample[42/100] ./temp/imagenette_val_224/img_00041.txt rc=0 ===
+MAIN type=f32 avg=1.81867e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,447,733]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 42/100
+=== sample[43/100] ./temp/imagenette_val_224/img_00042.txt rc=0 ===
+MAIN type=f32 avg=1.8093e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,633,836,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 43/100
+=== sample[44/100] ./temp/imagenette_val_224/img_00043.txt rc=0 ===
+MAIN type=f32 avg=1.80168e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,633,836,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 44/100
+=== sample[45/100] ./temp/imagenette_val_224/img_00044.txt rc=0 ===
+MAIN type=f32 avg=1.8194e+08 us (iters=1, warmup=0)
+  top1=555 top5=[555,864,812,675,867]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 45/100
+=== sample[46/100] ./temp/imagenette_val_224/img_00045.txt rc=0 ===
+MAIN type=f32 avg=1.82024e+08 us (iters=1, warmup=0)
+  top1=812 top5=[812,675,864,555,867]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 46/100
+=== sample[47/100] ./temp/imagenette_val_224/img_00046.txt rc=0 ===
+MAIN type=f32 avg=1.79908e+08 us (iters=1, warmup=0)
+  top1=733 top5=[733,837,836,633,459]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 47/100
+=== sample[48/100] ./temp/imagenette_val_224/img_00047.txt rc=0 ===
+MAIN type=f32 avg=1.80742e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 48/100
+=== sample[49/100] ./temp/imagenette_val_224/img_00048.txt rc=0 ===
+MAIN type=f32 avg=1.81345e+08 us (iters=1, warmup=0)
+  top1=836 top5=[836,837,633,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 49/100
+=== sample[50/100] ./temp/imagenette_val_224/img_00049.txt rc=0 ===
+MAIN type=f32 avg=1.80104e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,733,419]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 50/100
+=== sample[51/100] ./temp/imagenette_val_224/img_00050.txt rc=0 ===
+MAIN type=f32 avg=1.80933e+08 us (iters=1, warmup=0)
+  top1=733 top5=[733,837,836,633,419]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 51/100
+=== sample[52/100] ./temp/imagenette_val_224/img_00051.txt rc=0 ===
+MAIN type=f32 avg=1.80231e+08 us (iters=1, warmup=0)
+  top1=733 top5=[733,837,836,633,459]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 52/100
+=== sample[53/100] ./temp/imagenette_val_224/img_00052.txt rc=0 ===
+MAIN type=f32 avg=1.8098e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,633,678]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 53/100
+=== sample[54/100] ./temp/imagenette_val_224/img_00053.txt rc=0 ===
+MAIN type=f32 avg=1.81025e+08 us (iters=1, warmup=0)
+  top1=812 top5=[812,555,675,867,864]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 54/100
+=== sample[55/100] ./temp/imagenette_val_224/img_00054.txt rc=0 ===
+MAIN type=f32 avg=1.81124e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,701,451]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 55/100
+=== sample[56/100] ./temp/imagenette_val_224/img_00055.txt rc=0 ===
+MAIN type=f32 avg=1.80008e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,633,459]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 56/100
+=== sample[57/100] ./temp/imagenette_val_224/img_00056.txt rc=0 ===
+MAIN type=f32 avg=1.81889e+08 us (iters=1, warmup=0)
+  top1=836 top5=[836,837,733,636,633]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 57/100
+=== sample[58/100] ./temp/imagenette_val_224/img_00057.txt rc=0 ===
+MAIN type=f32 avg=1.81222e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,447,487,409]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 58/100
+=== sample[59/100] ./temp/imagenette_val_224/img_00058.txt rc=0 ===
+MAIN type=f32 avg=1.81046e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,633,733,836,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 59/100
+=== sample[60/100] ./temp/imagenette_val_224/img_00059.txt rc=0 ===
+MAIN type=f32 avg=1.81253e+08 us (iters=1, warmup=0)
+  top1=862 top5=[862,265,7,870,981]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 60/100
+=== sample[61/100] ./temp/imagenette_val_224/img_00060.txt rc=0 ===
+MAIN type=f32 avg=1.80773e+08 us (iters=1, warmup=0)
+  top1=447 top5=[447,837,836,487,419]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 61/100
+=== sample[62/100] ./temp/imagenette_val_224/img_00061.txt rc=0 ===
+MAIN type=f32 avg=1.82003e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 62/100
+=== sample[63/100] ./temp/imagenette_val_224/img_00062.txt rc=0 ===
+MAIN type=f32 avg=1.82819e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,733,836,633,419]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 63/100
+=== sample[64/100] ./temp/imagenette_val_224/img_00063.txt rc=0 ===
+MAIN type=f32 avg=1.84042e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,701,752]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 64/100
+=== sample[65/100] ./temp/imagenette_val_224/img_00064.txt rc=0 ===
+MAIN type=f32 avg=1.8327e+08 us (iters=1, warmup=0)
+  top1=7 top5=[7,134,181,348,86]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 65/100
+=== sample[66/100] ./temp/imagenette_val_224/img_00065.txt rc=0 ===
+MAIN type=f32 avg=1.83215e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 66/100
+=== sample[67/100] ./temp/imagenette_val_224/img_00066.txt rc=0 ===
+MAIN type=f32 avg=1.84379e+08 us (iters=1, warmup=0)
+  top1=836 top5=[836,837,733,633,678]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 67/100
+=== sample[68/100] ./temp/imagenette_val_224/img_00067.txt rc=0 ===
+MAIN type=f32 avg=1.83998e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,633,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 68/100
+=== sample[69/100] ./temp/imagenette_val_224/img_00068.txt rc=0 ===
+MAIN type=f32 avg=1.83448e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,447,836,733,409]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 69/100
+=== sample[70/100] ./temp/imagenette_val_224/img_00069.txt rc=0 ===
+MAIN type=f32 avg=1.82786e+08 us (iters=1, warmup=0)
+  top1=7 top5=[7,862,612,355,134]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 70/100
+=== sample[71/100] ./temp/imagenette_val_224/img_00070.txt rc=0 ===
+MAIN type=f32 avg=1.81968e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,733,836,633,459]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 71/100
+=== sample[72/100] ./temp/imagenette_val_224/img_00071.txt rc=0 ===
+MAIN type=f32 avg=1.82297e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,633,836,733,419]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 72/100
+=== sample[73/100] ./temp/imagenette_val_224/img_00072.txt rc=0 ===
+MAIN type=f32 avg=1.82689e+08 us (iters=1, warmup=0)
+  top1=733 top5=[733,837,836,633,678]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 73/100
+=== sample[74/100] ./temp/imagenette_val_224/img_00073.txt rc=0 ===
+MAIN type=f32 avg=1.84537e+08 us (iters=1, warmup=0)
+  top1=836 top5=[836,837,633,447,733]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 74/100
+=== sample[75/100] ./temp/imagenette_val_224/img_00074.txt rc=0 ===
+MAIN type=f32 avg=1.83936e+08 us (iters=1, warmup=0)
+  top1=836 top5=[836,837,633,733,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 75/100
+=== sample[76/100] ./temp/imagenette_val_224/img_00075.txt rc=0 ===
+MAIN type=f32 avg=1.82629e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,633,459]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 76/100
+=== sample[77/100] ./temp/imagenette_val_224/img_00076.txt rc=0 ===
+MAIN type=f32 avg=1.831e+08 us (iters=1, warmup=0)
+  top1=733 top5=[733,837,836,633,459]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 77/100
+=== sample[78/100] ./temp/imagenette_val_224/img_00077.txt rc=0 ===
+MAIN type=f32 avg=1.83415e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,636,733,515]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 78/100
+=== sample[79/100] ./temp/imagenette_val_224/img_00078.txt rc=0 ===
+MAIN type=f32 avg=1.85704e+08 us (iters=1, warmup=0)
+  top1=7 top5=[7,265,862,134,612]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 79/100
+=== sample[80/100] ./temp/imagenette_val_224/img_00079.txt rc=0 ===
+MAIN type=f32 avg=1.88344e+08 us (iters=1, warmup=0)
+  top1=836 top5=[836,447,837,633,733]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 80/100
+=== sample[81/100] ./temp/imagenette_val_224/img_00080.txt rc=0 ===
+MAIN type=f32 avg=1.87215e+08 us (iters=1, warmup=0)
+  top1=633 top5=[633,837,733,836,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 81/100
+=== sample[82/100] ./temp/imagenette_val_224/img_00081.txt rc=0 ===
+MAIN type=f32 avg=1.8529e+08 us (iters=1, warmup=0)
+  top1=837 top5=[837,836,733,633,678]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 82/100
+=== sample[83/100] ./temp/imagenette_val_224/img_00082.txt rc=0 ===
+MAIN type=f32 avg=1.87475e+08 us (iters=1, warmup=0)
+  top1=447 top5=[447,836,837,733,903]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 83/100
+=== sample[84/100] ./temp/imagenette_val_224/img_00083.txt rc=0 ===
+MAIN type=f32 avg=1.95766e+08 us (iters=1, warmup=0)
+  top1=812 top5=[812,555,864,803,867]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 84/100
+=== sample[85/100] ./temp/imagenette_val_224/img_00084.txt rc=0 ===
+MAIN type=f32 avg=1.93667e+08 us (iters=1, warmup=0)
+  top1=633 top5=[633,837,733,836,447]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 85/100
+=== sample[86/100] ./temp/imagenette_val_224/img_00085.txt rc=0 ===
+MAIN type=f32 avg=1.48095e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,394,395,390]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 86/100
+=== sample[87/100] ./temp/imagenette_val_224/img_00086.txt rc=0 ===
+MAIN type=f32 avg=1.463e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,998,987,395]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 87/100
+=== sample[88/100] ./temp/imagenette_val_224/img_00087.txt rc=0 ===
+MAIN type=f32 avg=1.47313e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,211,391,395]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 88/100
+=== sample[89/100] ./temp/imagenette_val_224/img_00088.txt rc=0 ===
+MAIN type=f32 avg=1.46243e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,395,391,394]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 89/100
+=== sample[90/100] ./temp/imagenette_val_224/img_00089.txt rc=0 ===
+MAIN type=f32 avg=1.47203e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,395,391,390]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 90/100
+=== sample[91/100] ./temp/imagenette_val_224/img_00090.txt rc=0 ===
+MAIN type=f32 avg=1.45456e+08 us (iters=1, warmup=0)
+  top1=1 top5=[1,29,0,391,395]
+  label=0 top1_hit=no top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 91/100
+=== sample[92/100] ./temp/imagenette_val_224/img_00091.txt rc=0 ===
+MAIN type=f32 avg=1.47888e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,391,394,389,395]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 92/100
+=== sample[93/100] ./temp/imagenette_val_224/img_00092.txt rc=0 ===
+MAIN type=f32 avg=1.45521e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,103,394,391,389]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 93/100
+=== sample[94/100] ./temp/imagenette_val_224/img_00093.txt rc=0 ===
+MAIN type=f32 avg=1.45096e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,391,103,390]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 94/100
+=== sample[95/100] ./temp/imagenette_val_224/img_00094.txt rc=0 ===
+MAIN type=f32 avg=1.45232e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,395,389,394,29]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 95/100
+=== sample[96/100] ./temp/imagenette_val_224/img_00095.txt rc=0 ===
+MAIN type=f32 avg=1.46228e+08 us (iters=1, warmup=0)
+  top1=389 top5=[389,0,395,394,391]
+  label=0 top1_hit=no top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 96/100
+=== sample[97/100] ./temp/imagenette_val_224/img_00096.txt rc=0 ===
+MAIN type=f32 avg=1.45515e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,395,390,394]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 97/100
+=== sample[98/100] ./temp/imagenette_val_224/img_00097.txt rc=0 ===
+MAIN type=f32 avg=1.45857e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,395,103,394]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 98/100
+=== sample[99/100] ./temp/imagenette_val_224/img_00098.txt rc=0 ===
+MAIN type=f32 avg=1.45073e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,391,395,1]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 99/100
+=== sample[100/100] ./temp/imagenette_val_224/img_00099.txt rc=0 ===
+MAIN type=f32 avg=1.46251e+08 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,395,391,36]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11_temp/mobilenetv2-12-qdq-p16e1.so
+
+[progress] 100/100
+
+Summary
+  target=mobilenetv2-12-p16e1
+  samples_used=100
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=177293610
+  total_wall_time_sec=17735.8
+  GT Top1(%)=13 Top5(%)=15
+  log_file=./temp/mobilenet11_temp/p16e1_limit100_label_nobase.log

@@ -1,0 +1,165 @@
+time_model_single_format config
+  model_name=resnet50-v1-12
+  format=p5e1
+  target_so=./temp/resnet_extra_all//resnet50-v1-12-qdq-p5e1.so
+  target_type=f32
+  txt_dir=./temp/imagenette_val_224
+  limit=10
+  shape=1x3x224x224
+  warmup=0
+  iters=1
+  timeout_sec=0
+  baseline=none
+  label_map=./temp/imagenette_val_224_labels.txt
+  mode=no-benchmark
+
+=== sample[1/10] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+MAIN type=f32 avg=1.63823e+08 us (iters=1, warmup=0)
+  top1=187 top5=[417,340,426,433,187]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/resnet_extra_all//resnet50-v1-12-qdq-p5e1.so
+
+[checkpoint] 1/10
+  samples_used=1
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=163823000
+  GT Top1(%)=0 Top5(%)=0
+
+[progress] 1/10
+=== sample[2/10] ./temp/imagenette_val_224/img_00001.txt rc=0 ===
+MAIN type=f32 avg=1.64109e+08 us (iters=1, warmup=0)
+  top1=796 top5=[796,433,413,399,456]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/resnet_extra_all//resnet50-v1-12-qdq-p5e1.so
+
+[checkpoint] 2/10
+  samples_used=2
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=163966000
+  GT Top1(%)=0 Top5(%)=0
+
+[progress] 2/10
+=== sample[3/10] ./temp/imagenette_val_224/img_00002.txt rc=0 ===
+MAIN type=f32 avg=1.62718e+08 us (iters=1, warmup=0)
+  top1=98 top5=[268,158,359,457,98]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/resnet_extra_all//resnet50-v1-12-qdq-p5e1.so
+
+[checkpoint] 3/10
+  samples_used=3
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=163550000
+  GT Top1(%)=0 Top5(%)=0
+
+[progress] 3/10
+=== sample[4/10] ./temp/imagenette_val_224/img_00003.txt rc=0 ===
+MAIN type=f32 avg=1.65148e+08 us (iters=1, warmup=0)
+  top1=417 top5=[794,417,917,723,433]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/resnet_extra_all//resnet50-v1-12-qdq-p5e1.so
+
+[checkpoint] 4/10
+  samples_used=4
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=163949500
+  GT Top1(%)=0 Top5(%)=0
+
+[progress] 4/10
+=== sample[5/10] ./temp/imagenette_val_224/img_00004.txt rc=0 ===
+MAIN type=f32 avg=1.63472e+08 us (iters=1, warmup=0)
+  top1=824 top5=[834,906,824,385,399]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/resnet_extra_all//resnet50-v1-12-qdq-p5e1.so
+
+[checkpoint] 5/10
+  samples_used=5
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=163854000
+  GT Top1(%)=0 Top5(%)=0
+
+[progress] 5/10
+=== sample[6/10] ./temp/imagenette_val_224/img_00005.txt rc=0 ===
+MAIN type=f32 avg=1.62783e+08 us (iters=1, warmup=0)
+  top1=88 top5=[545,88,606,701,488]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/resnet_extra_all//resnet50-v1-12-qdq-p5e1.so
+
+[checkpoint] 6/10
+  samples_used=6
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=163675500
+  GT Top1(%)=0 Top5(%)=0
+
+[progress] 6/10
+=== sample[7/10] ./temp/imagenette_val_224/img_00006.txt rc=0 ===
+MAIN type=f32 avg=1.64014e+08 us (iters=1, warmup=0)
+  top1=409 top5=[409,906,892,421,418]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/resnet_extra_all//resnet50-v1-12-qdq-p5e1.so
+
+[checkpoint] 7/10
+  samples_used=7
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=1.63724e+08
+  GT Top1(%)=0 Top5(%)=0
+
+[progress] 7/10
+=== sample[8/10] ./temp/imagenette_val_224/img_00007.txt rc=0 ===
+MAIN type=f32 avg=1.65567e+08 us (iters=1, warmup=0)
+  top1=426 top5=[806,611,824,863,426]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/resnet_extra_all//resnet50-v1-12-qdq-p5e1.so
+
+[checkpoint] 8/10
+  samples_used=8
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=163954250
+  GT Top1(%)=0 Top5(%)=0
+
+[progress] 8/10
+=== sample[9/10] ./temp/imagenette_val_224/img_00008.txt rc=0 ===
+MAIN type=f32 avg=1.63857e+08 us (iters=1, warmup=0)
+  top1=399 top5=[501,488,639,643,399]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/resnet_extra_all//resnet50-v1-12-qdq-p5e1.so
+
+[checkpoint] 9/10
+  samples_used=9
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=1.63943e+08
+  GT Top1(%)=0 Top5(%)=0
+
+[progress] 9/10
+=== sample[10/10] ./temp/imagenette_val_224/img_00009.txt rc=0 ===
+MAIN type=f32 avg=1.63052e+08 us (iters=1, warmup=0)
+  top1=815 top5=[815,824,284,417,268]
+  label=0 top1_hit=no top5_hit=no
+COMPARE baseline=f32 so=./temp/resnet_extra_all//resnet50-v1-12-qdq-p5e1.so
+
+[checkpoint] 10/10
+  samples_used=10
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=163854300
+  GT Top1(%)=0 Top5(%)=0
+
+[progress] 10/10
+
+Summary
+  target=resnet50-v1-12-p5e1
+  samples_used=10
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=163854300
+  total_wall_time_sec=1639.33
+  GT Top1(%)=0 Top5(%)=0
+  log_file=./temp/resnet_extra_all//extra_parallel_logs/resnet50-v1-12-p5e1.dataset.log

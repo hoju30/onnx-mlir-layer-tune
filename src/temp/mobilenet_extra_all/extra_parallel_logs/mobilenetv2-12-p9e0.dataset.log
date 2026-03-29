@@ -1,0 +1,165 @@
+time_model_single_format config
+  model_name=mobilenetv2-12
+  format=p9e0
+  target_so=./temp/mobilenet_extra_all//mobilenetv2-12-qdq-p9e0.so
+  target_type=f32
+  txt_dir=./temp/imagenette_val_224
+  limit=10
+  shape=1x3x224x224
+  warmup=0
+  iters=1
+  timeout_sec=0
+  baseline=none
+  label_map=./temp/imagenette_val_224_labels.txt
+  mode=no-benchmark
+
+=== sample[1/10] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+MAIN type=f32 avg=2.60568e+07 us (iters=1, warmup=0)
+  top1=306 top5=[306,513,764,0,441]
+  label=0 top1_hit=no top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet_extra_all//mobilenetv2-12-qdq-p9e0.so
+
+[checkpoint] 1/10
+  samples_used=1
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=26056800
+  GT Top1(%)=0 Top5(%)=100
+
+[progress] 1/10
+=== sample[2/10] ./temp/imagenette_val_224/img_00001.txt rc=0 ===
+MAIN type=f32 avg=2.62651e+07 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,394,395,391]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet_extra_all//mobilenetv2-12-qdq-p9e0.so
+
+[checkpoint] 2/10
+  samples_used=2
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=26160950
+  GT Top1(%)=50 Top5(%)=100
+
+[progress] 2/10
+=== sample[3/10] ./temp/imagenette_val_224/img_00002.txt rc=0 ===
+MAIN type=f32 avg=2.59139e+07 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,390,391,395]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet_extra_all//mobilenetv2-12-qdq-p9e0.so
+
+[checkpoint] 3/10
+  samples_used=3
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=26078600
+  GT Top1(%)=66.6667 Top5(%)=100
+
+[progress] 3/10
+=== sample[4/10] ./temp/imagenette_val_224/img_00003.txt rc=0 ===
+MAIN type=f32 avg=2.60792e+07 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,394,391,390]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet_extra_all//mobilenetv2-12-qdq-p9e0.so
+
+[checkpoint] 4/10
+  samples_used=4
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=26078750
+  GT Top1(%)=75 Top5(%)=100
+
+[progress] 4/10
+=== sample[5/10] ./temp/imagenette_val_224/img_00004.txt rc=0 ===
+MAIN type=f32 avg=2.61e+07 us (iters=1, warmup=0)
+  top1=0 top5=[0,390,389,391,363]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet_extra_all//mobilenetv2-12-qdq-p9e0.so
+
+[checkpoint] 5/10
+  samples_used=5
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=26083000
+  GT Top1(%)=80 Top5(%)=100
+
+[progress] 5/10
+=== sample[6/10] ./temp/imagenette_val_224/img_00005.txt rc=0 ===
+MAIN type=f32 avg=2.61e+07 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,390,395,391]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet_extra_all//mobilenetv2-12-qdq-p9e0.so
+
+[checkpoint] 6/10
+  samples_used=6
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=2.60858e+07
+  GT Top1(%)=83.3333 Top5(%)=100
+
+[progress] 6/10
+=== sample[7/10] ./temp/imagenette_val_224/img_00006.txt rc=0 ===
+MAIN type=f32 avg=2.60679e+07 us (iters=1, warmup=0)
+  top1=0 top5=[0,389,394,390,395]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet_extra_all//mobilenetv2-12-qdq-p9e0.so
+
+[checkpoint] 7/10
+  samples_used=7
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=2.60833e+07
+  GT Top1(%)=85.7143 Top5(%)=100
+
+[progress] 7/10
+=== sample[8/10] ./temp/imagenette_val_224/img_00007.txt rc=0 ===
+MAIN type=f32 avg=2.62546e+07 us (iters=1, warmup=0)
+  top1=0 top5=[389,0,391,395,390]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet_extra_all//mobilenetv2-12-qdq-p9e0.so
+
+[checkpoint] 8/10
+  samples_used=8
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=2.61047e+07
+  GT Top1(%)=87.5 Top5(%)=100
+
+[progress] 8/10
+=== sample[9/10] ./temp/imagenette_val_224/img_00008.txt rc=0 ===
+MAIN type=f32 avg=2.61347e+07 us (iters=1, warmup=0)
+  top1=0 top5=[0,395,389,391,394]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet_extra_all//mobilenetv2-12-qdq-p9e0.so
+
+[checkpoint] 9/10
+  samples_used=9
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=2.6108e+07
+  GT Top1(%)=88.8889 Top5(%)=100
+
+[progress] 9/10
+=== sample[10/10] ./temp/imagenette_val_224/img_00009.txt rc=0 ===
+MAIN type=f32 avg=2.56667e+07 us (iters=1, warmup=0)
+  top1=0 top5=[0,390,389,395,114]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet_extra_all//mobilenetv2-12-qdq-p9e0.so
+
+[checkpoint] 10/10
+  samples_used=10
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=26063890
+  GT Top1(%)=90 Top5(%)=100
+
+[progress] 10/10
+
+Summary
+  target=mobilenetv2-12-p9e0
+  samples_used=10
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=26063890
+  total_wall_time_sec=261.34
+  GT Top1(%)=90 Top5(%)=100
+  log_file=./temp/mobilenet_extra_all//extra_parallel_logs/mobilenetv2-12-p9e0.dataset.log

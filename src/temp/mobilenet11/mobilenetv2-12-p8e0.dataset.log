@@ -1,0 +1,39 @@
+time_model_single_format config
+  model_name=mobilenetv2-12
+  format=p8e0
+  target_so=./temp/mobilenet11/mobilenetv2-12-qdq-p8e0.so
+  target_type=f32
+  txt_dir=./temp/imagenette_val_224
+  limit=1
+  shape=1x3x224x224
+  warmup=0
+  iters=1
+  timeout_sec=0
+  baseline=nqdq-f32
+  baseline_so=./temp/mobilenet11/mobilenetv2-12-nqdq-f32.so
+  label_map=./temp/imagenette_val_224_labels.txt
+  mode=no-benchmark
+
+=== sample[1/1] ./temp/imagenette_val_224/img_00000.txt rc=0 ===
+MAIN type=f32 avg=7.46564e+07 us (iters=1, warmup=0)
+  top1=885 top5=[885,646,111,423,281]
+  label=0 top1_hit=no top5_hit=no
+CMP#1 type=f32 avg=59150.1 us so=./temp/mobilenet11/mobilenetv2-12-nqdq-f32.so
+  top1=0 top5=[0,764,389,150,758]
+  label=0 top1_hit=yes top5_hit=yes
+COMPARE baseline=f32 so=./temp/mobilenet11/mobilenetv2-12-nqdq-f32.so
+  C1 target=f32 so=./temp/mobilenet11/mobilenetv2-12-qdq-p8e0.so N=1000 MAE=2.29213 RMSE=2.97135 MaxAbs=16.5084 RMAE=1.07572 Cosine=0.0755515 JS=0.675941 Top1(885,0)=diff Top5Overlap=0 LatencyRatio=1262.15x
+
+[progress] 1/1
+
+Summary
+  target=mobilenetv2-12-p8e0
+  samples_used=1
+  samples_failed=0
+  samples_missing_label=0
+  avg_latency_us=74656400
+  total_wall_time_sec=74.811
+  baseline=nqdq-f32
+  MAE=2.29213 RMSE=2.97135 MaxAbs=16.5084 Cosine=0.0755515 RMAE=1.07572 JS=0.675941 Top1Match(%)=0 Top5Overlap=0
+  GT Top1(%)=0 Top5(%)=0
+  log_file=./temp/mobilenet11/mobilenetv2-12-p8e0.dataset.log
