@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 src_root="$(cd "${script_dir}/.." && pwd)"
+deps_root="${src_root}/.deps"
 if [[ -f "${script_dir}/px1_env.sh" ]]; then
   # shellcheck source=/dev/null
   source "${script_dir}/px1_env.sh"
@@ -10,12 +11,15 @@ elif [[ -f "${src_root}/px1_env.sh" ]]; then
   # shellcheck source=/dev/null
   source "${src_root}/px1_env.sh"
 else
-  export SOFTPOSIT_ROOT="${SOFTPOSIT_ROOT:-/home/lai/mlir_toy/SoftPosit/SoftPosit}"
+  export SOFTPOSIT_ROOT="${SOFTPOSIT_ROOT:-${deps_root}/SoftPosit}"
   export SOFTPOSIT_PX1_SRC="${SOFTPOSIT_PX1_SRC:-${SOFTPOSIT_ROOT}/source}"
   export SOFTPOSIT_PX1_INC="${SOFTPOSIT_PX1_INC:-${SOFTPOSIT_PX1_SRC}/include}"
   export SOFTPOSIT_PX1_ARCH_INC="${SOFTPOSIT_PX1_ARCH_INC:-${SOFTPOSIT_PX1_SRC}/8086-SSE}"
   export SOFTPOSIT_PX1_PLATFORM_INC="${SOFTPOSIT_PX1_PLATFORM_INC:-${SOFTPOSIT_ROOT}/build/Linux-x86_64-GCC}"
-  export SOFTPOSIT_PX1_LIB="${SOFTPOSIT_PX1_LIB:-${src_root}/.deps/softposit-px1/libsoftposit_full.so}"
+  if [[ ! -d "${SOFTPOSIT_PX1_PLATFORM_INC}" && -d "${SOFTPOSIT_ROOT}/build/Linux_x86_64_GCC" ]]; then
+    export SOFTPOSIT_PX1_PLATFORM_INC="${SOFTPOSIT_ROOT}/build/Linux_x86_64_GCC"
+  fi
+  export SOFTPOSIT_PX1_LIB="${SOFTPOSIT_PX1_LIB:-${deps_root}/softposit-px1/libsoftposit_full.so}"
   export SOFTPOSIT_PX1_LIB_DIR="${SOFTPOSIT_PX1_LIB_DIR:-$(dirname "${SOFTPOSIT_PX1_LIB}")}"
   export POSIT_PX1_SOFTPOSIT_BUILD_CFLAGS="${POSIT_PX1_SOFTPOSIT_BUILD_CFLAGS:--DSOFTPOSIT_FAST_INT64 -I${SOFTPOSIT_PX1_INC} -I${SOFTPOSIT_PX1_ARCH_INC} -I${SOFTPOSIT_PX1_PLATFORM_INC}}"
 fi
@@ -35,6 +39,11 @@ if [[ ! -f "${SOFTPOSIT_PX1_SRC}/pX1_add.c" ]]; then
   echo "  SOFTPOSIT_PX1_SRC=${SOFTPOSIT_PX1_SRC}"
   echo "Please point SOFTPOSIT_ROOT/SOFTPOSIT_PX1_SRC to a SoftPosit tree that contains pX1_*.c."
   exit 2
+fi
+
+softposit_types="${SOFTPOSIT_PX1_INC}/softposit_types.h"
+if [[ -f "${softposit_types}" ]]; then
+  perl -0pi -e 's/uint32_t ui=0;/uint32_t ui;/g; s/uint64_t ui\[2\]=\{0,0\};/uint64_t ui[2];/g; s/uint64_t ui\[8\]=\{0,0,0,0, 0,0,0,0\};/uint64_t ui[8];/g;' "${softposit_types}"
 fi
 
 if [[ ${force_rebuild} -eq 0 && -f "${SOFTPOSIT_PX1_LIB}" ]]; then

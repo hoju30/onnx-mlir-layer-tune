@@ -37,15 +37,67 @@ Value OnnxToKrnlBuilder::reshape(
 
   ShapedType inputType = mlir::cast<ShapedType>(input.getType());
   Type elementType = inputType.getElementType();
-  MultiDialectBuilder<OnnxBuilder, MemRefBuilder, KrnlBuilder, MathBuilder>
+  MultiDialectBuilder<OnnxBuilder, MemRefBuilder, KrnlBuilder,
+      IndexExprBuilderForKrnl, MathBuilder>
       create(b(), loc());
+  auto inputDimIE = [&](int64_t axis) -> IndexExpr {
+    return create.krnlIE.getShapeAsDim(input, axis);
+  };
+
+  DimsExpr normalizedShapeDims;
+  normalizedShapeDims.reserve(shapeDims.size());
+  int64_t inferDimPos = -1;
+  IndexExpr knownShapeProduct = LitIE(1);
+  if (inputType.hasRank()) {
+    IndexExpr totalInputElements = LitIE(1);
+    for (int64_t i = 0, e = inputType.getRank(); i < e; ++i) {
+      int64_t dim = inputType.getShape()[i];
+      totalInputElements =
+          totalInputElements *
+          (dim == ShapedType::kDynamic ? inputDimIE(i) : LitIE(dim));
+    }
+
+    for (int64_t i = 0, e = shapeDims.size(); i < e; ++i) {
+      IndexExpr dim = shapeDims[i];
+      if (dim.isLiteral()) {
+        int64_t lit = dim.getLiteral();
+        if (lit == 0 && i < inputType.getRank())
+          dim = inputDimIE(i);
+        if (lit == -1) {
+          inferDimPos = i;
+          dim = LitIE(1);
+        }
+      }
+      normalizedShapeDims.emplace_back(dim);
+      knownShapeProduct = knownShapeProduct * dim;
+    }
+
+    if (inferDimPos >= 0)
+      normalizedShapeDims[inferDimPos] =
+          totalInputElements.floorDiv(knownShapeProduct);
+  } else {
+    for (const DimIndexExpr &dim : shapeDims)
+      normalizedShapeDims.emplace_back(dim);
+  }
+
+  // Prefer a direct memref reinterpret cast for normalized memrefs.
+  // This avoids generating ONNXReshape/memref.reshape chains that may leave
+  // unresolved unranked memref casts late in the LLVM translation pipeline.
+  if (auto inputMemRefType = mlir::dyn_cast<MemRefType>(input.getType());
+      inputMemRefType && !hasNonIdentityLayout(inputMemRefType)) {
+    // Let reinterpretCast compute a verifier-compatible result type from the
+    // folded sizes. Some dimensions may be symbolically constant (e.g. 1280)
+    // but still materialized as dynamic size operands; forcing a static result
+    // type here can trigger memref verifier failures.
+    return create.mem.reinterpretCast(input, normalizedShapeDims);
+  }
 
   // If the output dimensions are all literals the 'onnx/Reshape' operation
   // can take the new shape via an 'onnx.Constant'.
   if (llvm::all_of(
-          shapeDims, [](const DimIndexExpr &dim) { return dim.isLiteral(); })) {
+          normalizedShapeDims, [](const IndexExpr &dim) { return dim.isLiteral(); })) {
     SmallVector<int64_t, 6> shape;
-    for (const IndexExpr &dim : shapeDims)
+    for (const IndexExpr &dim : normalizedShapeDims)
       shape.push_back(dim.getLiteral());
 
     auto constantOp = create.onnx.constantInt64(shape);
@@ -66,7 +118,7 @@ Value OnnxToKrnlBuilder::reshape(
 
   for (int64_t i = 0; i < length; ++i) {
     Value index = create.math.constant(indexTy, i);
-    Value data = shapeDims[i].getValue();
+    Value data = normalizedShapeDims[i].getValue();
     create.krnl.store(data, alloc, index);
   }
 
@@ -79,7 +131,7 @@ Value OnnxToKrnlBuilder::reshape(
   // The 'onnx.Reshape' operation yields a memref with unknown extents, so we
   // need to explicitly cast the result to the know size.
   SmallVector<int64_t, 6> castOutputShape;
-  for (const IndexExpr &dim : shapeDims)
+  for (const IndexExpr &dim : normalizedShapeDims)
     castOutputShape.push_back(
         dim.isLiteral() ? dim.getLiteral() : ShapedType::kDynamic);
 
@@ -113,7 +165,8 @@ Value OnnxToKrnlBuilder::transpose(const Value input,
 
 bool isScalarValue(Value value) {
   ShapedType stype = mlir::dyn_cast<ShapedType>(value.getType());
-  assert(stype && "expected shaped type");
+  if (!stype || !stype.hasRank())
+    return false;
   return (stype.getRank() == 0) ||
          (stype.getRank() == 1 && stype.getShape()[0] == 1);
 }
@@ -135,7 +188,8 @@ bool hasOneElement(Value value) {
   if (isScalarValue(value))
     return true;
   ShapedType type = mlir::dyn_cast<ShapedType>(value.getType());
-  assert(type && "expected shaped type");
+  if (!type || !type.hasRank())
+    return false;
   for (int64_t s : type.getShape())
     if (s != 1)
       return false;
@@ -323,11 +377,16 @@ Value emitMemRefReinterpretCastOp(ConversionPatternRewriter &rewriter,
     Location loc, Value data, DimsExpr &outputDims, Type outputType) {
   MemRefBuilder createMemRef(rewriter, loc);
   Value newView = createMemRef.reinterpretCast(data, outputDims);
-  // Set type to the output type to avoid unrealized_conversion_cast.
-  // It's because the output type is sometimes better than the inferred type,
-  // e.g. the output type has a static dim (e.g. set by users) that can be
-  // dynamic in the inferred type.
-  newView.setType(outputType);
+  // Avoid mutating the reinterpret_cast result type directly. That can violate
+  // memref verifier rules when the op carries dynamic size operands but the
+  // requested result type encodes a static dimension. Refine with memref.cast
+  // only when the two memref types are cast-compatible.
+  if (auto outMemRefType = mlir::dyn_cast<MemRefType>(outputType)) {
+    if (newView.getType() == outMemRefType)
+      return newView;
+    if (memref::CastOp::areCastCompatible(newView.getType(), outMemRefType))
+      return createMemRef.cast(newView, outMemRefType);
+  }
   return newView;
 }
 
@@ -514,10 +573,13 @@ KrnlTypeConverter::KrnlTypeConverter() {
     return krnl::StringType::get(stringType.getContext());
   });
 
-  addConversion([](TensorType tensorType) {
-    assert(tensorType.hasRank() && "expected only ranked shapes");
+  addConversion([](TensorType tensorType) -> Type {
+    Type elementType = tensorType.getElementType();
+    if (mlir::isa<ONNXStringType>(elementType))
+      elementType = krnl::StringType::get(tensorType.getContext());
+    if (!tensorType.hasRank())
+      return UnrankedMemRefType::get(elementType, 0);
     if (mlir::isa<ONNXStringType>(tensorType.getElementType())) {
-      Type elementType = krnl::StringType::get(tensorType.getContext());
       return MemRefType::get(tensorType.getShape(), elementType);
     }
     // Accelerators may have special versions of TensorType. Call the
@@ -529,7 +591,7 @@ KrnlTypeConverter::KrnlTypeConverter() {
     }
     if (hasCustomONNXTensorDataLayout(tensorType))
       return convertTypeWithCustomONNXDataLayoutToMemRef(tensorType);
-    return MemRefType::get(tensorType.getShape(), tensorType.getElementType());
+    return MemRefType::get(tensorType.getShape(), elementType);
   });
 
   addConversion([](SeqType seqType) {
@@ -553,6 +615,15 @@ KrnlTypeConverter::KrnlTypeConverter() {
     if (inputs.size() != 1)
       return Value();
 
+    Value input = inputs[0];
+    Type inputType = input.getType();
+    if (mlir::isa<BaseMemRefType>(inputType) &&
+        mlir::isa<BaseMemRefType>(resultType) &&
+        memref::CastOp::areCastCompatible(inputType, resultType)) {
+      return builder.create<memref::CastOp>(loc, resultType, input)
+          .getResult();
+    }
+
     return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
         .getResult(0);
   });
@@ -561,6 +632,15 @@ KrnlTypeConverter::KrnlTypeConverter() {
                                ValueRange inputs, Location loc) -> Value {
     if (inputs.size() != 1)
       return Value();
+
+    Value input = inputs[0];
+    Type inputType = input.getType();
+    if (mlir::isa<BaseMemRefType>(inputType) &&
+        mlir::isa<BaseMemRefType>(resultType) &&
+        memref::CastOp::areCastCompatible(inputType, resultType)) {
+      return builder.create<memref::CastOp>(loc, resultType, input)
+          .getResult();
+    }
 
     return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
         .getResult(0);
@@ -588,10 +668,12 @@ bool hasNonIdentityLayout(Value val) {
   // None values have no layout... we are safe.
   if (isNoneValue(val))
     return false;
-  // Expect a memref now.
-  MemRefType type = mlir::dyn_cast<MemRefType>(val.getType());
-  assert(type && "expected a memref type");
-  return hasNonIdentityLayout(type);
+  // During type conversion some values may still be non-memref (or unranked
+  // memref). Treat unknown layout conservatively as non-identity to disable
+  // SIMD/layout-sensitive paths instead of asserting.
+  if (auto type = mlir::dyn_cast<MemRefType>(val.getType()))
+    return hasNonIdentityLayout(type);
+  return true;
 }
 
 bool hasNonIdentityLayout(ValueRange operands) {

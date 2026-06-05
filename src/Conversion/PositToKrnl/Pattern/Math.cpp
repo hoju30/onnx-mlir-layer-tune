@@ -38,8 +38,27 @@ static UnrankedMemRefType getUnrankedPositBitsType(OpBuilder &b) {
   return UnrankedMemRefType::get(getPositStorageIntType(b), 0);
 }
 
+static std::string getPositRuntimeCompandRegisterName() {
+  return "posit_register_tensor_compand_p" +
+         std::to_string(gPositNbits) + "e" + std::to_string(gPositEs);
+}
+
+static std::string getPositRuntimeConstMetaRegisterName() {
+  return "posit_register_tensor_constmeta_p" +
+         std::to_string(gPositNbits) + "e" + std::to_string(gPositEs);
+}
+
+static std::string getPositRuntimeConstMetaChannelRegisterName() {
+  return "posit_register_tensor_constmeta_channel_p" +
+         std::to_string(gPositNbits) + "e" + std::to_string(gPositEs);
+}
+
 static std::string getPositRuntimeName(StringRef stem) {
-  return ("_mlir_ciface_posit_" + stem + "_p" + std::to_string(gPositNbits) +
+  // Keep the MLIR func.func symbol name clean. During memref-to-LLVM
+  // lowering, MLIR emits/calls the C-interface wrapper by adding the
+  // `_mlir_ciface_` prefix. If we include that prefix here, the final
+  // linked symbol becomes `_mlir_ciface__mlir_ciface_posit_*`.
+  return ("posit_" + stem + "_p" + std::to_string(gPositNbits) +
           "e" + std::to_string(gPositEs))
       .str();
 }
@@ -77,6 +96,10 @@ static Value cstF32(OpBuilder &b, Location loc, float v) {
   return b.create<arith::ConstantFloatOp>(loc,  b.getF32Type(),APFloat(v));
 }
 
+static Value cstF64(OpBuilder &b, Location loc, double v) {
+  return b.create<arith::ConstantFloatOp>(loc, b.getF64Type(), APFloat(v));
+}
+
 static Value castToUnranked(OpBuilder &b, Location loc, Value ranked,
                             Type unrankedTy) {
   if (ranked.getType() == unrankedTy)
@@ -110,16 +133,6 @@ static DenseIntElementsAttr makeI64Dense1D(OpBuilder &b, ArrayRef<int64_t> vals)
   for (int64_t v : vals)
     ap.push_back(APInt(64, static_cast<uint64_t>(v), true));
   return DenseIntElementsAttr::get(ty, ap);
-}
-
-static DenseElementsAttr makeF32Dense1D(OpBuilder &b, ArrayRef<float> vals) {
-  auto f32Ty = b.getF32Type();
-  auto ty = RankedTensorType::get({static_cast<int64_t>(vals.size())}, f32Ty);
-  SmallVector<Attribute, 4> attrs;
-  attrs.reserve(vals.size());
-  for (float v : vals)
-    attrs.push_back(FloatAttr::get(f32Ty, v));
-  return DenseElementsAttr::get(ty, attrs);
 }
 
 static Value stripUnrealizedMemrefCast(Value v, Type expectedElemTy) {
@@ -240,9 +253,11 @@ static Value materializePositFromF32CastChainIfNeeded(
   Value outU = castToUnranked(rewriter, loc, out, unrankedI);
 
   ModuleOp module = rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  auto fnTy = rewriter.getFunctionType({unrankedF32, unrankedI}, {});
+  auto fnTy = rewriter.getFunctionType(
+      {unrankedF32, unrankedI, rewriter.getI64Type()}, {});
   auto callee = getOrCreateFunc(module, getPositRuntimeName("from_f32"), fnTy);
-  rewriter.create<func::CallOp>(loc, callee, ValueRange{inU, outU});
+  Value qalignKey = cstI64(rewriter, loc, 0);
+  rewriter.create<func::CallOp>(loc, callee, ValueRange{inU, outU, qalignKey});
   return out;
 }
 
@@ -266,6 +281,71 @@ static Value loadShapeAsI64(ConversionPatternRewriter &rewriter, Location loc,
   if (intTy.getWidth() > 64)
     return rewriter.create<arith::TruncIOp>(loc, i64Ty, dim);
   return dim;
+}
+
+static func::FuncOp getOrCreateRegisterTensorCompandFunc(ModuleOp module,
+    ConversionPatternRewriter &rewriter) {
+  auto fnTy = rewriter.getFunctionType(
+      {getUnrankedPositBitsType(rewriter), rewriter.getI64Type(),
+          rewriter.getF64Type(), rewriter.getF64Type()},
+      {});
+  return getOrCreateFunc(
+      module, getPositRuntimeCompandRegisterName(), fnTy);
+}
+
+static func::FuncOp getOrCreateRegisterTensorConstMetaFunc(
+    ModuleOp module, ConversionPatternRewriter &rewriter) {
+  auto fnTy = rewriter.getFunctionType(
+      {getUnrankedPositBitsType(rewriter), rewriter.getI64Type(),
+          rewriter.getF64Type(), rewriter.getF64Type(), rewriter.getI64Type(),
+          rewriter.getI64Type(), rewriter.getI64Type()},
+      {});
+  return getOrCreateFunc(
+      module, getPositRuntimeConstMetaRegisterName(), fnTy);
+}
+
+static func::FuncOp getOrCreateRegisterTensorConstMetaChannelFunc(
+    ModuleOp module, ConversionPatternRewriter &rewriter) {
+  auto fnTy = rewriter.getFunctionType(
+      {getUnrankedPositBitsType(rewriter), rewriter.getI64Type(),
+       rewriter.getI64Type(), rewriter.getF64Type(), rewriter.getF64Type(),
+       rewriter.getI64Type(), rewriter.getI64Type(), rewriter.getI64Type()},
+      {});
+  return getOrCreateFunc(
+      module, getPositRuntimeConstMetaChannelRegisterName(), fnTy);
+}
+
+static bool getDenseI64AttrVector(Attribute attr, SmallVectorImpl<int64_t> &out) {
+  auto dense = llvm::dyn_cast_or_null<ElementsAttr>(attr);
+  if (!dense)
+    return false;
+  auto rtt = llvm::dyn_cast<RankedTensorType>(dense.getType());
+  if (!rtt || !rtt.hasStaticShape() || rtt.getRank() != 1)
+    return false;
+  auto intTy = llvm::dyn_cast<IntegerType>(rtt.getElementType());
+  if (!intTy)
+    return false;
+  out.clear();
+  out.reserve(rtt.getNumElements());
+  for (APInt v : dense.getValues<APInt>())
+    out.push_back(v.getSExtValue());
+  return true;
+}
+
+static bool getDenseF64AttrVector(Attribute attr, SmallVectorImpl<double> &out) {
+  auto dense = llvm::dyn_cast_or_null<ElementsAttr>(attr);
+  if (!dense)
+    return false;
+  auto rtt = llvm::dyn_cast<RankedTensorType>(dense.getType());
+  if (!rtt || !rtt.hasStaticShape() || rtt.getRank() != 1)
+    return false;
+  if (!llvm::isa<FloatType>(rtt.getElementType()))
+    return false;
+  out.clear();
+  out.reserve(rtt.getNumElements());
+  for (APFloat v : dense.getValues<APFloat>())
+    out.push_back(v.convertToDouble());
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -300,6 +380,73 @@ struct PositConstantOpLowering : public OpConversionPattern<posit::ConstantOp> {
     st.addAttribute("value", dense);
 
     Operation *global = rewriter.create(st);
+    auto modeAttr = op->getAttrOfType<IntegerAttr>("compand_mode");
+    auto thetaAttr = op->getAttrOfType<FloatAttr>("compand_theta");
+    auto gammaAttr = op->getAttrOfType<FloatAttr>("compand_gamma");
+    auto gpEnabledAttr = op->getAttrOfType<IntegerAttr>("gp_enabled");
+    auto gpRsAttr = op->getAttrOfType<IntegerAttr>("gp_rs");
+    auto gpScAttr = op->getAttrOfType<IntegerAttr>("gp_sc");
+    auto axisAttr = op->getAttrOfType<IntegerAttr>("constmeta_axis");
+    const bool hasCompand =
+        modeAttr && thetaAttr && gammaAttr && getInt64Safe(modeAttr) != 0;
+    const bool hasGp = gpEnabledAttr && getInt64Safe(gpEnabledAttr) != 0 &&
+                       gpRsAttr && gpScAttr;
+    SmallVector<int64_t, 8> modesAxis;
+    SmallVector<double, 8> thetasAxis;
+    SmallVector<double, 8> gammasAxis;
+    SmallVector<int64_t, 8> gpEnabledAxis;
+    SmallVector<int64_t, 8> gpRsAxis;
+    SmallVector<int64_t, 8> gpScAxis;
+    const bool hasPerAxis =
+        axisAttr && getInt64Safe(axisAttr) == 0 &&
+        getDenseI64AttrVector(op->getAttr("compand_mode_axis0"), modesAxis) &&
+        getDenseF64AttrVector(op->getAttr("compand_theta_axis0"), thetasAxis) &&
+        getDenseF64AttrVector(op->getAttr("compand_gamma_axis0"), gammasAxis) &&
+        getDenseI64AttrVector(op->getAttr("gp_enabled_axis0"), gpEnabledAxis) &&
+        getDenseI64AttrVector(op->getAttr("gp_rs_axis0"), gpRsAxis) &&
+        getDenseI64AttrVector(op->getAttr("gp_sc_axis0"), gpScAxis) &&
+        modesAxis.size() == thetasAxis.size() &&
+        modesAxis.size() == gammasAxis.size() &&
+        modesAxis.size() == gpEnabledAxis.size() &&
+        modesAxis.size() == gpRsAxis.size() &&
+        modesAxis.size() == gpScAxis.size();
+    if (hasPerAxis) {
+      ModuleOp module = op->getParentOfType<ModuleOp>();
+      auto fn = getOrCreateRegisterTensorConstMetaChannelFunc(module, rewriter);
+      auto callee = SymbolRefAttr::get(module.getContext(), fn.getName());
+      Value globalU = castToUnranked(
+          rewriter, loc, global->getResult(0), getUnrankedPositBitsType(rewriter));
+      for (size_t i = 0; i < modesAxis.size(); ++i) {
+        rewriter.create<func::CallOp>(
+            loc, callee, TypeRange{},
+            ValueRange{globalU,
+                       cstI64(rewriter, loc, static_cast<int64_t>(i)),
+                       cstI64(rewriter, loc, modesAxis[i]),
+                       cstF64(rewriter, loc, thetasAxis[i]),
+                       cstF64(rewriter, loc, gammasAxis[i]),
+                       cstI64(rewriter, loc, gpEnabledAxis[i]),
+                       cstI64(rewriter, loc, gpRsAxis[i]),
+                       cstI64(rewriter, loc, gpScAxis[i])});
+      }
+    } else if (hasCompand || hasGp) {
+      ModuleOp module = op->getParentOfType<ModuleOp>();
+      auto fn = getOrCreateRegisterTensorConstMetaFunc(module, rewriter);
+      auto callee = SymbolRefAttr::get(module.getContext(), fn.getName());
+      Value globalU = castToUnranked(
+          rewriter, loc, global->getResult(0), getUnrankedPositBitsType(rewriter));
+      Value modeV = cstI64(rewriter, loc, hasCompand ? getInt64Safe(modeAttr) : 0);
+      Value thetaV = cstF64(rewriter, loc,
+                            hasCompand ? thetaAttr.getValueAsDouble() : 1.0);
+      Value gammaV = cstF64(rewriter, loc,
+                            hasCompand ? gammaAttr.getValueAsDouble() : 0.0);
+      Value gpEnabledV = cstI64(rewriter, loc, hasGp ? 1 : 0);
+      Value gpRsV = cstI64(rewriter, loc, hasGp ? getInt64Safe(gpRsAttr) : 7);
+      Value gpScV = cstI64(rewriter, loc, hasGp ? getInt64Safe(gpScAttr) : 0);
+      rewriter.create<func::CallOp>(
+          loc, callee, TypeRange{},
+          ValueRange{globalU, modeV, thetaV, gammaV, gpEnabledV, gpRsV,
+                     gpScV});
+    }
     rewriter.replaceOp(op, global->getResult(0));
     return success();
   }
@@ -315,28 +462,33 @@ struct PositFromF32OpLowering : public OpConversionPattern<posit::FromF32Op> {
   LogicalResult matchAndRewrite(posit::FromF32Op op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    int64_t qalignKey = 0;
+    if (auto a = op->template getAttrOfType<IntegerAttr>("qalign_key"))
+      qalignKey = getInt64Safe(a);
 
     auto outTy = llvm::dyn_cast<MemRefType>(
         getTypeConverter()->convertType(op.getResult().getType()));
     if (!outTy)
       return rewriter.notifyMatchFailure(op, "from_f32 expects memref result");
 
-    // Fold from_f32(to_f32(x)) -> x to avoid redundant runtime round-trips.
-    Value rawInput = stripMemrefAndUnrealizedCast(op.getInput());
-    if (auto toF32 = rawInput.getDefiningOp<posit::ToF32Op>()) {
-      Value positSrc = stripMemrefAndUnrealizedCast(toF32.getInput());
-      Value remapped = rewriter.getRemappedValue(positSrc);
-      if (!remapped)
-        remapped = positSrc;
-      remapped = stripMemrefAndUnrealizedCast(remapped);
-      if (llvm::isa<MemRefType>(remapped.getType())) {
-        Value folded = remapped;
-        if (folded.getType() != outTy)
-          folded = rewriter
-                       .create<UnrealizedConversionCastOp>(loc, outTy, folded)
-                       .getResult(0);
-        rewriter.replaceOp(op, folded);
-        return success();
+    // Fold from_f32(to_f32(x)) -> x only when qalign is not active.
+    if (qalignKey == 0) {
+      Value rawInput = stripMemrefAndUnrealizedCast(op.getInput());
+      if (auto toF32 = rawInput.getDefiningOp<posit::ToF32Op>()) {
+        Value positSrc = stripMemrefAndUnrealizedCast(toF32.getInput());
+        Value remapped = rewriter.getRemappedValue(positSrc);
+        if (!remapped)
+          remapped = positSrc;
+        remapped = stripMemrefAndUnrealizedCast(remapped);
+        if (llvm::isa<MemRefType>(remapped.getType())) {
+          Value folded = remapped;
+          if (folded.getType() != outTy)
+            folded = rewriter
+                         .create<UnrealizedConversionCastOp>(loc, outTy, folded)
+                         .getResult(0);
+          rewriter.replaceOp(op, folded);
+          return success();
+        }
       }
     }
 
@@ -351,10 +503,12 @@ struct PositFromF32OpLowering : public OpConversionPattern<posit::FromF32Op> {
     Value outU = castToUnranked(rewriter, loc, out, unrankedI8);
 
     ModuleOp module = op->getParentOfType<ModuleOp>();
-    auto fnTy = rewriter.getFunctionType({unrankedF32, unrankedI8}, {});
+    auto fnTy = rewriter.getFunctionType(
+        {unrankedF32, unrankedI8, rewriter.getI64Type()}, {});
     auto callee = getOrCreateFunc(module, getPositRuntimeName("from_f32"), fnTy);
+    Value qalignKeyV = cstI64(rewriter, loc, qalignKey);
 
-    rewriter.create<func::CallOp>(loc, callee, ValueRange{inU, outU});
+    rewriter.create<func::CallOp>(loc, callee, ValueRange{inU, outU, qalignKeyV});
     rewriter.replaceOp(op, out);
     return success();
   }
@@ -372,22 +526,27 @@ struct PositToF32OpLowering : public OpConversionPattern<posit::ToF32Op> {
     if (!outTy)
       return rewriter.notifyMatchFailure(op, "to_f32 expects memref result");
 
-    // Fold to_f32(from_f32(x)) -> x to avoid redundant runtime round-trips.
+    // Fold to_f32(from_f32(x)) -> x only when qalign is not active.
     Value rawInput = stripMemrefAndUnrealizedCast(op.getInput());
     if (auto fromF32 = rawInput.getDefiningOp<posit::FromF32Op>()) {
-      Value f32Src = stripMemrefAndUnrealizedCast(fromF32.getInput());
-      Value remapped = rewriter.getRemappedValue(f32Src);
-      if (!remapped)
-        remapped = f32Src;
-      remapped = stripMemrefAndUnrealizedCast(remapped);
-      if (llvm::isa<MemRefType>(remapped.getType())) {
-        Value folded = remapped;
-        if (folded.getType() != outTy)
-          folded = rewriter
-                       .create<UnrealizedConversionCastOp>(loc, outTy, folded)
-                       .getResult(0);
-        rewriter.replaceOp(op, folded);
-        return success();
+      int64_t qalignKey = 0;
+      if (auto a = fromF32->getAttrOfType<IntegerAttr>("qalign_key"))
+        qalignKey = getInt64Safe(a);
+      if (qalignKey == 0) {
+        Value f32Src = stripMemrefAndUnrealizedCast(fromF32.getInput());
+        Value remapped = rewriter.getRemappedValue(f32Src);
+        if (!remapped)
+          remapped = f32Src;
+        remapped = stripMemrefAndUnrealizedCast(remapped);
+        if (llvm::isa<MemRefType>(remapped.getType())) {
+          Value folded = remapped;
+          if (folded.getType() != outTy)
+            folded = rewriter
+                         .create<UnrealizedConversionCastOp>(loc, outTy, folded)
+                         .getResult(0);
+          rewriter.replaceOp(op, folded);
+          return success();
+        }
       }
     }
 
@@ -421,9 +580,11 @@ struct PositDequantizeLinearOpLowering
     auto outTy = llvm::dyn_cast<MemRefType>(
         getTypeConverter()->convertType(op.getResult().getType()));
     auto inTy = llvm::dyn_cast<MemRefType>(adaptor.getInput().getType());
-    if (!outTy || !inTy)
+    auto inUnrankedTy =
+        llvm::dyn_cast<UnrankedMemRefType>(adaptor.getInput().getType());
+    if (!outTy || (!inTy && !inUnrankedTy))
       return rewriter.notifyMatchFailure(
-          op, "dequantize_linear expects ranked memref input/output");
+          op, "dequantize_linear expects memref/unranked_memref input and ranked memref output");
 
     Value out = allocLikeValue(rewriter, loc, outTy, adaptor.getInput());
     if (!out)
@@ -435,6 +596,7 @@ struct PositDequantizeLinearOpLowering
     int64_t hasZeroPoint = 0;
     int64_t axis = 1;
     int64_t inputSigned = 1;
+    int64_t qalignKey = 0;
     DenseElementsAttr scaleValues;
     DenseElementsAttr zeroPointValues;
     if (auto a = op->getAttrOfType<FloatAttr>("scale"))
@@ -447,18 +609,97 @@ struct PositDequantizeLinearOpLowering
       axis = getInt64Safe(a);
     if (auto a = op->getAttrOfType<BoolAttr>("input_signed"))
       inputSigned = a.getValue() ? 1 : 0;
+    if (auto a = op->template getAttrOfType<IntegerAttr>("qalign_key"))
+      qalignKey = getInt64Safe(a);
     if (auto a = op->getAttrOfType<DenseElementsAttr>("scale_values"))
       scaleValues = a;
     if (auto a = op->getAttrOfType<DenseElementsAttr>("zero_point_values"))
       zeroPointValues = a;
 
-    auto unrankedIn = UnrankedMemRefType::get(inTy.getElementType(), 0);
-    auto unrankedOut = getUnrankedPositBitsType(rewriter);
+    auto getDenseStaticNumElems = [](DenseElementsAttr dense) -> int64_t {
+      if (!dense)
+        return 0;
+      auto st = llvm::dyn_cast<ShapedType>(dense.getType());
+      if (!st || !st.hasRank() || !st.hasStaticShape())
+        return -1;
+      return st.getNumElements();
+    };
+
+    const bool hasScaleValues = static_cast<bool>(scaleValues);
+    const bool hasZeroPointValues = static_cast<bool>(zeroPointValues);
+    const bool useAxisVector = hasScaleValues || hasZeroPointValues;
+
+    int64_t normalizedAxis = axis;
+    int64_t inputRank = -1;
+    if (inTy && inTy.hasRank())
+      inputRank = inTy.getRank();
+    else if (inUnrankedTy)
+      inputRank = inUnrankedTy.getRank();
+    if (inputRank >= 0) {
+      if (normalizedAxis < 0)
+        normalizedAxis += inputRank;
+      if (normalizedAxis < 0 || normalizedAxis >= inputRank)
+        return rewriter.notifyMatchFailure(
+            op, "inconsistent q-params: axis is out of range for input rank");
+      axis = normalizedAxis;
+    } else if (normalizedAxis < 0) {
+      return rewriter.notifyMatchFailure(
+          op, "inconsistent q-params: negative axis requires ranked input");
+    }
+
+    if (useAxisVector) {
+      if (!hasScaleValues)
+        return rewriter.notifyMatchFailure(op,
+            "inconsistent q-params: zero_point_values exists but scale_values is missing");
+      if (!hasZeroPoint && hasZeroPointValues)
+        return rewriter.notifyMatchFailure(op,
+            "inconsistent q-params: has_zero_point=0 but zero_point_values exists");
+      if (hasZeroPoint && !hasZeroPointValues)
+        return rewriter.notifyMatchFailure(op,
+            "inconsistent q-params: per-axis mode requires zero_point_values when has_zero_point=1");
+
+      int64_t scaleLen = getDenseStaticNumElems(scaleValues);
+      if (scaleLen <= 0)
+        return rewriter.notifyMatchFailure(op,
+            "inconsistent q-params: scale_values must be ranked/static with positive length");
+
+      if (hasZeroPointValues) {
+        int64_t zpLen = getDenseStaticNumElems(zeroPointValues);
+        if (zpLen <= 0)
+          return rewriter.notifyMatchFailure(op,
+              "inconsistent q-params: zero_point_values must be ranked/static with positive length");
+        if (zpLen != scaleLen)
+          return rewriter.notifyMatchFailure(op,
+              "inconsistent q-params: zero_point_values length must equal scale_values length");
+      }
+
+      if (scaleLen > 1) {
+        if (!inTy || !inTy.hasRank())
+          return rewriter.notifyMatchFailure(op,
+              "inconsistent q-params: per-axis scale_values (>1) requires ranked input");
+        int64_t axisDim = inTy.getShape()[axis];
+        if (axisDim != ShapedType::kDynamic && axisDim != scaleLen)
+          return rewriter.notifyMatchFailure(op,
+              "inconsistent q-params: per-axis scale_values length must match input dim at axis");
+      }
+    }
+
+    const bool dqOutputsF32 = outTy.getElementType().isF32();
+    Type inElemTy = inTy ? inTy.getElementType() : inUnrankedTy.getElementType();
+    auto unrankedIn = UnrankedMemRefType::get(inElemTy, 0);
+    auto unrankedOut = dqOutputsF32 ? UnrankedMemRefType::get(rewriter.getF32Type(), 0)
+                                    : getUnrankedPositBitsType(rewriter);
     Value inputForCall = adaptor.getInput();
-    Type inElemTy = inTy.getElementType();
     if (auto iTy = llvm::dyn_cast<IntegerType>(inElemTy)) {
-      if (iTy.isUnsignedInteger()) {
-        auto i8InTy = MemRefType::get(inTy.getShape(), rewriter.getI8Type());
+      // Runtime dequantize kernels take int8 payload. Some upstream paths may
+      // still present i32/signless ints here; normalize to i8 for a stable
+      // callee signature.
+      if (iTy.getWidth() != 8 || iTy.isUnsignedInteger()) {
+        Type i8InTy;
+        if (inTy)
+          i8InTy = MemRefType::get(inTy.getShape(), rewriter.getI8Type());
+        else
+          i8InTy = UnrankedMemRefType::get(rewriter.getI8Type(), 0);
         inputForCall = rewriter
                            .create<UnrealizedConversionCastOp>(
                                loc, i8InTy, inputForCall)
@@ -470,22 +711,43 @@ struct PositDequantizeLinearOpLowering
     Value inU = castToUnranked(rewriter, loc, inputForCall, unrankedIn);
     Value outU = castToUnranked(rewriter, loc, out, unrankedOut);
 
+    // Optional second operand is the pre-QuantizeLinear f32 reference tensor.
+    // It is passed only to the *_ref runtime variants so runtime can collect
+    // full-reference rows: orig_x, int8_x_dq, runtime_x_dq, runtime_final.
+    Value origRefU;
+    bool hasOrigRefOperand = false;
+    if (adaptor.getOperands().size() >= 2) {
+      // IMPORTANT: use the converted adaptor operand here.  The original
+      // op operand is a tensor<...xf32>; after type conversion it becomes
+      // memref<...xf32>.  Do not strip UnrealizedConversionCastOp here,
+      // otherwise we fall back to the original tensor operand and this
+      // pattern fails to legalize posit.dequantize_linear(..., orig_ref).
+      Value origRef = adaptor.getOperands()[1];
+      Type origTy = origRef.getType();
+      bool isF32Memref = false;
+      if (auto mt = llvm::dyn_cast<MemRefType>(origTy))
+        isF32Memref = mt.getElementType().isF32();
+      else if (auto ut = llvm::dyn_cast<UnrankedMemRefType>(origTy))
+        isF32Memref = ut.getElementType().isF32();
+      if (!isF32Memref)
+        return rewriter.notifyMatchFailure(
+            op, "optional dequantize full-reference operand must be converted to f32 memref");
+      origRefU = castToUnranked(
+          rewriter, loc, origRef, UnrankedMemRefType::get(rewriter.getF32Type(), 0));
+      hasOrigRefOperand = true;
+    }
+
     ModuleOp module = op->getParentOfType<ModuleOp>();
     // Keep ONNX axis-broadcast semantics whenever vector constants are present.
-    bool useAxisVector = static_cast<bool>(scaleValues) ||
-                         static_cast<bool>(zeroPointValues);
     if (useAxisVector) {
-      DenseElementsAttr scaleDense = scaleValues;
-      if (!scaleDense)
-        scaleDense = makeF32Dense1D(rewriter, ArrayRef<float>{scale});
       Value scaleGlobal = createKrnlGlobalFromDense(
-          rewriter, loc, scaleDense, "posit_dq_scale");
+          rewriter, loc, scaleValues, "posit_dq_scale");
       if (!scaleGlobal)
         return rewriter.notifyMatchFailure(
             op, "failed to materialize per-axis scale_values global");
 
       Value zpGlobal;
-      if (hasZeroPoint && zeroPointValues) {
+      if (hasZeroPoint) {
         zpGlobal = createKrnlGlobalFromDense(
             rewriter, loc, zeroPointValues, "posit_dq_zp");
       } else {
@@ -502,29 +764,46 @@ struct PositDequantizeLinearOpLowering
       Value scaleU = castToUnranked(rewriter, loc, scaleGlobal, unrankedScale);
       Value zpU = castToUnranked(rewriter, loc, zpGlobal, unrankedZp);
 
-      auto fnTy = rewriter.getFunctionType(
-          {unrankedIn, unrankedOut, unrankedScale, unrankedZp,
-              rewriter.getI64Type(), rewriter.getI64Type(), rewriter.getI64Type()},
-          {});
-      auto callee = getOrCreateFunc(
-          module, getPositRuntimeName("dequantize_linear_axis"), fnTy);
-      rewriter.create<func::CallOp>(
-          loc, callee,
-          ValueRange{inU, outU, scaleU, zpU, cstI64(rewriter, loc, hasZeroPoint),
-              cstI64(rewriter, loc, axis), cstI64(rewriter, loc, inputSigned)});
+      SmallVector<Type, 9> argTys{unrankedIn, unrankedOut};
+      if (hasOrigRefOperand)
+        argTys.push_back(UnrankedMemRefType::get(rewriter.getF32Type(), 0));
+      argTys.append({unrankedScale, unrankedZp, rewriter.getI64Type(),
+          rewriter.getI64Type(), rewriter.getI64Type(), rewriter.getI64Type()});
+      auto fnTy = rewriter.getFunctionType(argTys, {});
+      std::string calleeName = getPositRuntimeName(
+          dqOutputsF32 ? (hasOrigRefOperand ? "dequantize_linear_axis_f32_ref"
+                                            : "dequantize_linear_axis_f32")
+                       : (hasOrigRefOperand ? "dequantize_linear_axis_ref"
+                                            : "dequantize_linear_axis"));
+      auto callee = getOrCreateFunc(module, calleeName, fnTy);
+      SmallVector<Value, 9> args{inU, outU};
+      if (hasOrigRefOperand)
+        args.push_back(origRefU);
+      args.append({scaleU, zpU, cstI64(rewriter, loc, hasZeroPoint),
+          cstI64(rewriter, loc, axis), cstI64(rewriter, loc, inputSigned),
+          cstI64(rewriter, loc, qalignKey)});
+      rewriter.create<func::CallOp>(loc, callee, args);
     } else {
-      auto fnTy = rewriter.getFunctionType(
-          {unrankedIn, unrankedOut, rewriter.getF32Type(), rewriter.getI64Type(),
-              rewriter.getI64Type(), rewriter.getI64Type(), rewriter.getI64Type()},
-          {});
-      auto callee =
-          getOrCreateFunc(module, getPositRuntimeName("dequantize_linear"), fnTy);
-      rewriter.create<func::CallOp>(
-          loc, callee,
-          ValueRange{inU, outU, cstF32(rewriter, loc, scale),
-              cstI64(rewriter, loc, zeroPoint),
-              cstI64(rewriter, loc, hasZeroPoint), cstI64(rewriter, loc, axis),
-              cstI64(rewriter, loc, inputSigned)});
+      SmallVector<Type, 9> argTys{unrankedIn, unrankedOut};
+      if (hasOrigRefOperand)
+        argTys.push_back(UnrankedMemRefType::get(rewriter.getF32Type(), 0));
+      argTys.append({rewriter.getF32Type(), rewriter.getI64Type(),
+          rewriter.getI64Type(), rewriter.getI64Type(),
+          rewriter.getI64Type(), rewriter.getI64Type()});
+      auto fnTy = rewriter.getFunctionType(argTys, {});
+      std::string calleeName = getPositRuntimeName(
+          dqOutputsF32 ? (hasOrigRefOperand ? "dequantize_linear_f32_ref"
+                                            : "dequantize_linear_f32")
+                       : (hasOrigRefOperand ? "dequantize_linear_ref"
+                                            : "dequantize_linear"));
+      auto callee = getOrCreateFunc(module, calleeName, fnTy);
+      SmallVector<Value, 9> args{inU, outU};
+      if (hasOrigRefOperand)
+        args.push_back(origRefU);
+      args.append({cstF32(rewriter, loc, scale), cstI64(rewriter, loc, zeroPoint),
+          cstI64(rewriter, loc, hasZeroPoint), cstI64(rewriter, loc, axis),
+          cstI64(rewriter, loc, inputSigned), cstI64(rewriter, loc, qalignKey)});
+      rewriter.create<func::CallOp>(loc, callee, args);
     }
     rewriter.replaceOp(op, out);
     return success();
@@ -557,6 +836,9 @@ struct PositBinaryOpLowering : public OpConversionPattern<OpT> {
       return rewriter.notifyMatchFailure(op, "failed to allocate dynamic binary result");
 
     auto unrankedI8 = getUnrankedPositBitsType(rewriter);
+    int64_t qalignKey = 0;
+    if (auto a = op->template getAttrOfType<IntegerAttr>("qalign_key"))
+      qalignKey = getInt64Safe(a);
 
     Type positBitsTy = getPositStorageIntType(rewriter);
     Value lhs = stripUnrealizedMemrefCast(adaptor.getLhs(), positBitsTy);
@@ -566,10 +848,12 @@ struct PositBinaryOpLowering : public OpConversionPattern<OpT> {
     Value outU = castToUnranked(rewriter, loc, out, unrankedI8);
 
     ModuleOp module = op->template getParentOfType<ModuleOp>();
-    auto fnTy = rewriter.getFunctionType({unrankedI8, unrankedI8, unrankedI8}, {});
+    auto fnTy = rewriter.getFunctionType(
+        {unrankedI8, unrankedI8, unrankedI8, rewriter.getI64Type()}, {});
     auto callee = getOrCreateFunc(module, calleeName, fnTy);
 
-    rewriter.create<func::CallOp>(loc, callee, ValueRange{aU, bU, outU});
+    rewriter.create<func::CallOp>(
+        loc, callee, ValueRange{aU, bU, outU, cstI64(rewriter, loc, qalignKey)});
     rewriter.replaceOp(op, out);
     return success();
   }
@@ -598,15 +882,20 @@ struct PositReluOpLowering : public OpConversionPattern<posit::ReluOp> {
       return rewriter.notifyMatchFailure(op, "failed to allocate dynamic relu result");
 
     auto unrankedI8 = getUnrankedPositBitsType(rewriter);
+    int64_t qalignKey = 0;
+    if (auto a = op->getAttrOfType<IntegerAttr>("qalign_key"))
+      qalignKey = getInt64Safe(a);
 
     Value inU  = castToUnranked(rewriter, loc, adaptor.getInput(), unrankedI8);
     Value outU = castToUnranked(rewriter, loc, out, unrankedI8);
 
     ModuleOp module = op->getParentOfType<ModuleOp>();
-    auto fnTy = rewriter.getFunctionType({unrankedI8, unrankedI8}, {});
+    auto fnTy = rewriter.getFunctionType(
+        {unrankedI8, unrankedI8, rewriter.getI64Type()}, {});
     auto callee = getOrCreateFunc(module, getPositRuntimeName("relu"), fnTy);
 
-    rewriter.create<func::CallOp>(loc, callee, ValueRange{inU, outU});
+    rewriter.create<func::CallOp>(
+        loc, callee, ValueRange{inU, outU, cstI64(rewriter, loc, qalignKey)});
     rewriter.replaceOp(op, out);
     return success();
   }
@@ -629,6 +918,9 @@ struct PositClipOpLowering : public OpConversionPattern<posit::ClipOp> {
 
     bool hasMin = false, hasMax = false;
     float minVal = 0.0f, maxVal = 0.0f;
+    int64_t qalignKey = 0;
+    if (auto a = op->getAttrOfType<IntegerAttr>("qalign_key"))
+      qalignKey = getInt64Safe(a);
     if (auto a = op->getAttrOfType<BoolAttr>("has_min"))
       hasMin = a.getValue();
     if (auto a = op->getAttrOfType<BoolAttr>("has_max"))
@@ -645,14 +937,15 @@ struct PositClipOpLowering : public OpConversionPattern<posit::ClipOp> {
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto fnTy = rewriter.getFunctionType(
         {unrankedI, unrankedI, rewriter.getF32Type(), rewriter.getF32Type(),
-            rewriter.getI64Type(), rewriter.getI64Type()},
+            rewriter.getI64Type(), rewriter.getI64Type(), rewriter.getI64Type()},
         {});
     auto callee = getOrCreateFunc(module, getPositRuntimeName("clip"), fnTy);
     rewriter.create<func::CallOp>(
         loc, callee,
         ValueRange{inU, outU, cstF32(rewriter, loc, minVal),
             cstF32(rewriter, loc, maxVal), cstI64(rewriter, loc, hasMin ? 1 : 0),
-            cstI64(rewriter, loc, hasMax ? 1 : 0)});
+            cstI64(rewriter, loc, hasMax ? 1 : 0),
+            cstI64(rewriter, loc, qalignKey)});
     rewriter.replaceOp(op, out);
     return success();
   }
@@ -760,6 +1053,9 @@ struct PositConv2DOpLowering : public OpConversionPattern<posit::Conv2DOp> {
     }
 
     auto unrankedI8 = getUnrankedPositBitsType(rewriter);
+    int64_t qalignKey = 0;
+    if (auto a = op->getAttrOfType<IntegerAttr>("qalign_key"))
+      qalignKey = getInt64Safe(a);
 
     Value xPrepared = materializePositFromF32CastChainIfNeeded(
         rewriter, loc, adaptor.getX());
@@ -774,7 +1070,7 @@ struct PositConv2DOpLowering : public OpConversionPattern<posit::Conv2DOp> {
                                rewriter.getI64Type(), rewriter.getI64Type(),
                                rewriter.getI64Type(), rewriter.getI64Type(),
                                rewriter.getI64Type(), rewriter.getI64Type(),
-                               rewriter.getI64Type()};
+                               rewriter.getI64Type(), rewriter.getI64Type()};
     auto fnTy = rewriter.getFunctionType(inTys, {});
     auto callee = getOrCreateFunc(module, getPositRuntimeName("conv2d_nchw"), fnTy);
 
@@ -785,7 +1081,8 @@ struct PositConv2DOpLowering : public OpConversionPattern<posit::Conv2DOp> {
                    cstI64(rewriter, loc, dH), cstI64(rewriter, loc, dW),
                    cstI64(rewriter, loc, pt), cstI64(rewriter, loc, pl),
                    cstI64(rewriter, loc, pb), cstI64(rewriter, loc, pr),
-                   cstI64(rewriter, loc, group)});
+                   cstI64(rewriter, loc, group),
+                   cstI64(rewriter, loc, qalignKey)});
 
     rewriter.replaceOp(op, out);
     return success();
@@ -815,6 +1112,9 @@ struct PositMaxPool2DOpLowering : public OpConversionPattern<posit::MaxPool2DOp>
       ceilMode = cm.getValue().getSExtValue();
 
     auto unrankedI8 = getUnrankedPositBitsType(rewriter);
+    int64_t qalignKey = 0;
+    if (auto a = op->getAttrOfType<IntegerAttr>("qalign_key"))
+      qalignKey = getInt64Safe(a);
 
     Value xU   = castToUnranked(rewriter, loc, adaptor.getX(), unrankedI8);
     Value outU = castToUnranked(rewriter, loc, out, unrankedI8);
@@ -825,7 +1125,7 @@ struct PositMaxPool2DOpLowering : public OpConversionPattern<posit::MaxPool2DOp>
                                rewriter.getI64Type(), rewriter.getI64Type(),
                                rewriter.getI64Type(), rewriter.getI64Type(),
                                rewriter.getI64Type(), rewriter.getI64Type(),
-                               rewriter.getI64Type()};
+                               rewriter.getI64Type(), rewriter.getI64Type()};
     auto fnTy = rewriter.getFunctionType(inTys, {});
     auto callee = getOrCreateFunc(module, getPositRuntimeName("maxpool2d_nchw"), fnTy);
 
@@ -836,7 +1136,8 @@ struct PositMaxPool2DOpLowering : public OpConversionPattern<posit::MaxPool2DOp>
                    cstI64(rewriter, loc, sH), cstI64(rewriter, loc, sW),
                    cstI64(rewriter, loc, pt), cstI64(rewriter, loc, pl),
                    cstI64(rewriter, loc, pb), cstI64(rewriter, loc, pr),
-                   cstI64(rewriter, loc, ceilMode)});
+                   cstI64(rewriter, loc, ceilMode),
+                   cstI64(rewriter, loc, qalignKey)});
 
     rewriter.replaceOp(op, out);
     return success();
@@ -857,10 +1158,12 @@ struct PositGemmOpLowering : public OpConversionPattern<posit::GemmOp> {
 
     float alpha = 1.0f, beta = 1.0f;
     int64_t transA = 0, transB = 0;
+    int64_t qalignKey = 0;
     if (auto a = op->getAttrOfType<FloatAttr>("alpha")) alpha = a.getValueAsDouble();
     if (auto b = op->getAttrOfType<FloatAttr>("beta"))  beta  = b.getValueAsDouble();
     if (auto ta = op->getAttrOfType<IntegerAttr>("transA")) transA = ta.getValue().getSExtValue();
     if (auto tb = op->getAttrOfType<IntegerAttr>("transB")) transB = tb.getValue().getSExtValue();
+    if (auto a = op->getAttrOfType<IntegerAttr>("qalign_key")) qalignKey = getInt64Safe(a);
 
     Value aPrepared = materializePositFromF32CastChainIfNeeded(
         rewriter, loc, adaptor.getA());
@@ -934,7 +1237,8 @@ struct PositGemmOpLowering : public OpConversionPattern<posit::GemmOp> {
     ModuleOp module = op->getParentOfType<ModuleOp>();
     SmallVector<Type> inTys = {unrankedI8, unrankedI8, unrankedI8, unrankedI8,
                                rewriter.getF32Type(), rewriter.getF32Type(),
-                               rewriter.getI64Type(), rewriter.getI64Type()};
+                               rewriter.getI64Type(), rewriter.getI64Type(),
+                               rewriter.getI64Type()};
     auto fnTy = rewriter.getFunctionType(inTys, {});
     auto callee = getOrCreateFunc(module, getPositRuntimeName("gemm"), fnTy);
 
@@ -944,7 +1248,8 @@ struct PositGemmOpLowering : public OpConversionPattern<posit::GemmOp> {
                    cstF32(rewriter, loc, alpha),
                    cstF32(rewriter, loc, beta),
                    cstI64(rewriter, loc, transA),
-                   cstI64(rewriter, loc, transB)});
+                   cstI64(rewriter, loc, transB),
+                   cstI64(rewriter, loc, qalignKey)});
 
     rewriter.replaceOp(op, out);
     return success();
@@ -973,8 +1278,11 @@ struct PositReduceMeanOpLowering : public OpConversionPattern<posit::ReduceMeanO
         axes.push_back(getInt64Safe(a));
     }
     int64_t keepdims = 1;
+    int64_t qalignKey = 0;
     if (auto a = op->getAttrOfType<IntegerAttr>("keepdims"))
       keepdims = getInt64Safe(a);
+    if (auto a = op->getAttrOfType<IntegerAttr>("qalign_key"))
+      qalignKey = getInt64Safe(a);
 
     int64_t axis0 = axes.size() >= 1 ? axes[0] : 2;
     int64_t axis1 = axes.size() >= 2 ? axes[1] : 3;
@@ -986,13 +1294,14 @@ struct PositReduceMeanOpLowering : public OpConversionPattern<posit::ReduceMeanO
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto fnTy = rewriter.getFunctionType(
         {unrankedI, unrankedI, rewriter.getI64Type(), rewriter.getI64Type(),
-            rewriter.getI64Type()},
+            rewriter.getI64Type(), rewriter.getI64Type()},
         {});
     auto callee = getOrCreateFunc(module, getPositRuntimeName("reduce_mean"), fnTy);
     rewriter.create<func::CallOp>(
         loc, callee,
         ValueRange{inU, outU, cstI64(rewriter, loc, axis0),
-            cstI64(rewriter, loc, axis1), cstI64(rewriter, loc, keepdims)});
+            cstI64(rewriter, loc, axis1), cstI64(rewriter, loc, keepdims),
+            cstI64(rewriter, loc, qalignKey)});
     rewriter.replaceOp(op, out);
     return success();
   }

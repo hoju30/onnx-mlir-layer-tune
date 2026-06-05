@@ -61,7 +61,7 @@ public:
 
 private:
   static LogicalResult verifyRanked(Operation &op) {
-    for (auto ty : op.getOperandTypes()) {
+    for (auto [idx, ty] : llvm::enumerate(op.getOperandTypes())) {
       if (mlir::isa<SeqType>(ty)) {
         auto seqTy = mlir::cast<SeqType>(ty);
         if (!mlir::isa<RankedTensorType>(seqTy.getElementType())) {
@@ -69,6 +69,14 @@ private:
           return failure();
         }
       } else if (!mlir::isa<RankedTensorType>(ty) && !mlir::isa<NoneType>(ty)) {
+        // QDQ models may carry an unranked tensor into DequantizeLinear
+        // (e.g., output of custom QLinearAdd). Allow this specific case when
+        // the DequantizeLinear result itself is already ranked.
+        if (auto dqOp = llvm::dyn_cast<ONNXDequantizeLinearOp>(op)) {
+          if (idx == 0 && mlir::isa<UnrankedTensorType>(ty) &&
+              mlir::isa<RankedTensorType>(dqOp.getResult().getType()))
+            continue;
+        }
         op.emitError("not ranked");
         return failure();
       } else if (ONNXGatherNDOp gatherNDOp =

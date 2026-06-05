@@ -188,3 +188,5 @@ dmypy.json
 .vscode
 .devcontainer
 .vs
+src/.deps/
+src/temp/

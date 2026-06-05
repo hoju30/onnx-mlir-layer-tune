@@ -84,6 +84,18 @@ llvm::cl::opt<std::string> positFormatOpt("posit-format",
     llvm::cl::cat(OnnxMlirOptOptions), llvm::cl::NotHidden,
     llvm::cl::init(""));
 
+llvm::cl::opt<bool> alignToInt8QDomainOpt("align-to-int8-qdomain",
+    llvm::cl::desc(
+        "Require ONNX Q->DQ lowering to stay aligned with INT8 quantization "
+        "domain (scale/zero_point) in convert-onnx-to-posit"),
+    llvm::cl::cat(OnnxMlirOptOptions), llvm::cl::init(false));
+
+llvm::cl::opt<bool> strictQDQModeOpt("strict-qdq-lowering",
+    llvm::cl::desc(
+        "Use strict ONNX QDQ semantics first in convert-onnx-to-posit; "
+        "when OFF (default), prefer direct f32->posit from Q source"),
+    llvm::cl::cat(OnnxMlirOptOptions), llvm::cl::init(false));
+
 static bool isSupportedPositFormat(unsigned nbits, unsigned es) {
   // Existing stable set.
   if (nbits == 8 || nbits == 16 || nbits == 32)
@@ -240,7 +252,8 @@ void registerOMPasses(int optLevel) {
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     PositFormatConfig cfg = getPositFormatConfig();
-    return createConvertONNXToPositPass(cfg.nbits, cfg.es);
+    return createConvertONNXToPositPass(
+        cfg.nbits, cfg.es, alignToInt8QDomainOpt, !strictQDQModeOpt);
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     PositFormatConfig cfg = getPositFormatConfig();

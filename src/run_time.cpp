@@ -10,8 +10,10 @@
 #include <iostream>
 #include <numeric>
 #include <random>
+#include <sstream>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 #include "mlir/ExecutionEngine/CRunnerUtils.h"
 
@@ -154,6 +156,135 @@ static std::string resolveSoPathForDlopen(const std::string &path) {
   if (f.good())
     return std::string("./") + path;
   return path;
+}
+
+static std::string basenameOnly(const std::string &path) {
+  size_t pos = path.find_last_of("/\\");
+  return (pos == std::string::npos) ? path : path.substr(pos + 1);
+}
+
+static std::string stripSharedObjectSuffix(std::string s) {
+  if (s.size() >= 3 && s.substr(s.size() - 3) == ".so")
+    s.resize(s.size() - 3);
+  return s;
+}
+
+static void appendUnique(std::vector<std::string> &dst, const std::string &s) {
+  if (s.empty())
+    return;
+  if (std::find(dst.begin(), dst.end(), s) == dst.end())
+    dst.push_back(s);
+}
+
+static std::vector<std::string> deriveEntrypointStemCandidates(
+    const std::string &soPath) {
+  std::vector<std::string> stems;
+  std::string base = stripSharedObjectSuffix(basenameOnly(soPath));
+  appendUnique(stems, base);
+  for (const std::string &marker : {"-nqdq-", "-qdq-"}) {
+    size_t pos = base.find(marker);
+    if (pos != std::string::npos)
+      appendUnique(stems, base.substr(0, pos));
+  }
+  return stems;
+}
+
+static std::vector<std::string> entrypointCandidates(const std::string &soPath,
+    const std::string &preferred, bool explicitPreferred) {
+  std::vector<std::string> out;
+  appendUnique(out, preferred);
+  if (explicitPreferred)
+    return out;
+
+  std::vector<std::string> stems = deriveEntrypointStemCandidates(soPath);
+
+  appendUnique(out, "_mlir_ciface_main_graph");
+  for (const std::string &stem : stems)
+    appendUnique(out, "_mlir_ciface_main_graph_" + stem);
+  appendUnique(out, "run_main_graph");
+  for (const std::string &stem : stems)
+    appendUnique(out, "run_main_graph_" + stem);
+  appendUnique(out, "main_graph");
+  for (const std::string &stem : stems)
+    appendUnique(out, "main_graph_" + stem);
+  return out;
+}
+
+static std::vector<std::string> queryEntrypointCandidates(void *handle) {
+  std::vector<std::string> out;
+  using QueryEntryPointsFn = const char **(*)(int64_t *);
+
+  dlerror();
+  auto *queryFn = reinterpret_cast<QueryEntryPointsFn>(
+      dlsym(handle, "omQueryEntryPoints"));
+  const char *err = dlerror();
+  if (err || !queryFn)
+    return out;
+
+  int64_t count = 0;
+  const char **entries = queryFn(&count);
+  if (!entries)
+    return out;
+
+  std::vector<std::string> rawNames;
+  auto appendDerived = [&](const std::string &name) {
+    static const std::string runPrefix = "run_main_graph";
+    if (name.rfind(runPrefix, 0) == 0)
+      appendUnique(out, "_mlir_ciface_main_graph" + name.substr(runPrefix.size()));
+    static const std::string mainPrefix = "main_graph";
+    if (name.rfind(mainPrefix, 0) == 0)
+      appendUnique(out, "_mlir_ciface_main_graph" + name.substr(mainPrefix.size()));
+    appendUnique(rawNames, name);
+  };
+
+  if (count > 0) {
+    for (int64_t i = 0; i < count; ++i) {
+      if (!entries[i])
+        break;
+      appendDerived(entries[i]);
+    }
+  } else {
+    for (const char **p = entries; p && *p; ++p)
+      appendDerived(*p);
+  }
+  for (const std::string &name : rawNames)
+    appendUnique(out, name);
+  return out;
+}
+
+static void *resolveEntrypointSymbol(
+    void *handle, const std::string &soPath, const std::string &preferred,
+    bool explicitPreferred, std::string &resolvedEntry,
+    std::string &attemptedEntries) {
+  std::vector<std::string> candidates;
+  if (explicitPreferred) {
+    candidates = entrypointCandidates(soPath, preferred, explicitPreferred);
+  } else {
+    appendUnique(candidates, preferred);
+    appendUnique(candidates, "_mlir_ciface_main_graph");
+    for (const std::string &stem : deriveEntrypointStemCandidates(soPath))
+      appendUnique(candidates, "_mlir_ciface_main_graph_" + stem);
+    for (const std::string &q : queryEntrypointCandidates(handle))
+      appendUnique(candidates, q);
+    for (const std::string &fallback :
+         entrypointCandidates(soPath, preferred, explicitPreferred))
+      appendUnique(candidates, fallback);
+  }
+  attemptedEntries.clear();
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    if (i)
+      attemptedEntries += ", ";
+    attemptedEntries += candidates[i];
+    dlerror();
+    void *sym = dlsym(handle, candidates[i].c_str());
+    const char *err = dlerror();
+    if (!err && sym) {
+      resolvedEntry = candidates[i];
+      return sym;
+    }
+  }
+  resolvedEntry.clear();
+  return nullptr;
 }
 
 static bool tryParseOutType(const std::string &s, OutType &out) {
@@ -366,6 +497,60 @@ static bool readTxtFloats(const std::string &path, std::vector<float> &out) {
   while (fin >> v)
     out.push_back(v);
   return !out.empty();
+}
+
+static std::string shellQuote(const std::string &s) {
+  std::string out = "'";
+  for (char c : s) {
+    if (c == '\'')
+      out += "'\\''";
+    else
+      out += c;
+  }
+  out += "'";
+  return out;
+}
+
+static std::string shapeToString(const int64_t shape[4]) {
+  std::ostringstream os;
+  os << shape[0] << "x" << shape[1] << "x" << shape[2] << "x" << shape[3];
+  return os.str();
+}
+
+static bool preprocessImageToFloats(const std::string &imagePath,
+    const std::string &scriptPath, const int64_t shape[4], int64_t resizeShort,
+    int64_t cropSize, std::vector<float> &out) {
+  if (scriptPath.empty()) {
+    std::cerr << "--image requires --image-preprocess-script or "
+                 "POSIT_IMAGE_PREPROCESS_SCRIPT\n";
+    return false;
+  }
+
+  char tmpTemplate[] = "/tmp/posit_image_tensor_XXXXXX";
+  int fd = mkstemp(tmpTemplate);
+  if (fd < 0) {
+    std::cerr << "failed to create temporary image tensor file\n";
+    return false;
+  }
+  close(fd);
+  std::string tmpPath = tmpTemplate;
+
+  std::ostringstream cmd;
+  cmd << "python3 " << shellQuote(scriptPath) << " --image "
+      << shellQuote(imagePath) << " --output " << shellQuote(tmpPath)
+      << " --shape " << shellQuote(shapeToString(shape)) << " --resize-short "
+      << resizeShort << " --crop-size " << cropSize;
+  int rc = std::system(cmd.str().c_str());
+  if (rc != 0) {
+    std::cerr << "image preprocess failed rc=" << rc << ": " << imagePath
+              << "\n";
+    unlink(tmpPath.c_str());
+    return false;
+  }
+
+  bool ok = readTxtFloats(tmpPath, out);
+  unlink(tmpPath.c_str());
+  return ok;
 }
 
 static bool writeLogitsCsv(const std::string &path, const std::vector<double> &logits) {
@@ -910,11 +1095,13 @@ static RunStats benchmarkByOutType(void *sym, InDesc &in, int64_t warmup, int64_
 static void usage(const char *prog) {
   std::cerr
       << "Usage:\n"
-      << "  " << prog
-      << " <model.so> [input.txt] [--shape NxCxHxW] [--zeros|--random [seed]]\n"
+      << "  " << prog << " <model.so> [input.txt]\n"
+      << "    [--image FILE --image-preprocess-script FILE]\n"
+      << "    [--shape NxCxHxW] [--zeros|--random [seed]]\n"
       << "    [--out-type p*e*|f32]\n"
       << "    [--posit p*e*] [--entry symbol] [--cmp so:type[:entry] ...]\n"
       << "    [--baseline main|cmp:N] [--label class_id]\n"
+      << "    [--resize-short N] [--crop-size N]\n"
       << "    [--dump-logits FILE] [--dump-cmp-logits-dir DIR]\n"
       << "    [--warmup N] [--iters N] [--quire on|off]\n"
       << "    [--stats] [--quiet] [--no-free] [--no-benchmark]\n";
@@ -935,7 +1122,11 @@ int main(int argc, char **argv) {
 
   std::string soPath = argv[1];
   std::string inputPath;
+  std::string imagePath;
+  std::string imagePreprocessScript;
   int64_t inputShape[4] = {1, 3, 224, 224};
+  int64_t resizeShort = 256;
+  int64_t cropSize = 224;
   bool forceZeros = false;
   bool forceRandom = true;
   uint32_t randomSeed = 12345u;
@@ -951,6 +1142,8 @@ int main(int argc, char **argv) {
   OutType mainOutType = OutType::F32;
   std::string mainEntry = "_mlir_ciface_main_graph";
   std::string refEntry = "_mlir_ciface_main_graph";
+  bool mainEntryExplicit = false;
+  bool refEntryExplicit = false;
   std::string baselineSpec = "main";
   int64_t label = -1;
   std::string dumpLogitsPath;
@@ -975,6 +1168,23 @@ int main(int argc, char **argv) {
     } else if (a == "--zeros") {
       forceZeros = true;
       forceRandom = false;
+    } else if (a == "--image") {
+      if (i + 1 >= argc)
+        return 1;
+      imagePath = argv[++i];
+      forceRandom = false;
+    } else if (a == "--image-preprocess-script") {
+      if (i + 1 >= argc)
+        return 1;
+      imagePreprocessScript = argv[++i];
+    } else if (a == "--resize-short") {
+      if (i + 1 >= argc)
+        return 1;
+      resizeShort = parseI64(argv[++i], "resize-short");
+    } else if (a == "--crop-size") {
+      if (i + 1 >= argc)
+        return 1;
+      cropSize = parseI64(argv[++i], "crop-size");
     } else if (a == "--random") {
       forceRandom = true;
       forceZeros = false;
@@ -992,10 +1202,12 @@ int main(int argc, char **argv) {
       if (i + 1 >= argc)
         return 1;
       mainEntry = argv[++i];
+      mainEntryExplicit = true;
     } else if (a == "--ref-entry") {
       if (i + 1 >= argc)
         return 1;
       refEntry = argv[++i];
+      refEntryExplicit = true;
     } else if (a == "--cmp") {
       if (i + 1 >= argc)
         return 1;
@@ -1055,6 +1267,16 @@ int main(int argc, char **argv) {
     }
   }
 
+  if (!imagePath.empty() && !inputPath.empty()) {
+    std::cerr << "Use either positional input.txt or --image, not both\n";
+    return 1;
+  }
+  if (imagePreprocessScript.empty()) {
+    const char *envScript = std::getenv("POSIT_IMAGE_PREPROCESS_SCRIPT");
+    if (envScript)
+      imagePreprocessScript = envScript;
+  }
+
   bool baselineIsMain = true;
   size_t baselineCmpIdx = 0;
   if (baselineSpec == "main") {
@@ -1085,7 +1307,19 @@ int main(int argc, char **argv) {
 
   std::vector<float> input;
   input.resize(static_cast<size_t>(numInputElems(inputShape)));
-  if (!inputPath.empty()) {
+  if (!imagePath.empty()) {
+    std::vector<float> img;
+    if (!preprocessImageToFloats(
+            imagePath, imagePreprocessScript, inputShape, resizeShort, cropSize, img)) {
+      return 1;
+    } else if (img.size() != input.size()) {
+      std::cerr << "[ERROR] image tensor size mismatch (file=" << img.size()
+                << ", need=" << input.size() << ")\n";
+      return 1;
+    } else {
+      input = std::move(img);
+    }
+  } else if (!inputPath.empty()) {
     std::vector<float> txt;
     if (!readTxtFloats(inputPath, txt)) {
       std::cerr << "[WARN] failed to read input file, fallback random: " << inputPath << "\n";
@@ -1113,13 +1347,20 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  dlerror();
-  auto *mainSym = dlsym(h, mainEntry.c_str());
-  const char *err = dlerror();
-  if (err || !mainSym) {
-    std::cerr << "dlsym(" << mainEntry << ") failed: " << (err ? err : "unknown") << "\n";
+  std::string resolvedMainEntry;
+  std::string attemptedMainEntries;
+  auto *mainSym = resolveEntrypointSymbol(
+      h, soPath, mainEntry, mainEntryExplicit, resolvedMainEntry,
+      attemptedMainEntries);
+  if (!mainSym) {
+    std::cerr << "dlsym failed. attempted entries: [" << attemptedMainEntries
+              << "]\n";
     dlclose(h);
     return 3;
+  }
+  if (!quiet && resolvedMainEntry != mainEntry) {
+    std::cout << "CONFIG main_entry_resolved=" << resolvedMainEntry
+              << " (requested=" << mainEntry << ")\n";
   }
 
   RunStats mainBench{};
@@ -1185,16 +1426,24 @@ int main(int argc, char **argv) {
       return 5;
     }
 
-    dlerror();
-    const std::string &entry = ref.entrySymbol.empty() ? refEntry : ref.entrySymbol;
-    auto *sym = dlsym(hr, entry.c_str());
-    const char *e = dlerror();
-    if (e || !sym) {
-      std::cerr << "CMP#" << (i + 1) << " dlsym(" << entry << ") failed: "
-                << (e ? e : "unknown") << "\n";
+    const bool explicitCmpEntry = !ref.entrySymbol.empty();
+    const std::string &entry = explicitCmpEntry ? ref.entrySymbol : refEntry;
+    std::string resolvedCmpEntry;
+    std::string attemptedCmpEntries;
+    auto *sym = resolveEntrypointSymbol(hr, ref.soPath, entry,
+        explicitCmpEntry || refEntryExplicit, resolvedCmpEntry,
+        attemptedCmpEntries);
+    if (!sym) {
+      std::cerr << "CMP#" << (i + 1) << " dlsym failed. attempted entries: ["
+                << attemptedCmpEntries << "]\n";
       dlclose(hr);
       dlclose(h);
       return 6;
+    }
+    if (!quiet && resolvedCmpEntry != entry) {
+      std::cout << "CONFIG cmp#" << (i + 1)
+                << "_entry_resolved=" << resolvedCmpEntry
+                << " (requested=" << entry << ")\n";
     }
 
     RefRun rr;

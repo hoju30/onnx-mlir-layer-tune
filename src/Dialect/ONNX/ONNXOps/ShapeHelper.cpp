@@ -804,11 +804,29 @@ LogicalResult ONNXUnaryOpShapeHelper::computeShape() {
   // Set the variables that belong to superclass ONNXBroadcastOpShapeHelper
   // (inputsDims, outputRank) to valid values. The hasUniBroadcast flag is
   // already set to default false in the constructor.
-  outputRank = createIE->getShapedTypeRank(operands[0]);
-  DimsExpr dims;
-  createIE->getShapeAsDims(operands[0], dims);
-  inputsDims.emplace_back(dims);
-  return setOutputDimsFromOperand(operands[0]);
+  if (createIE->hasShapeAndRank(operands[0])) {
+    outputRank = createIE->getShapedTypeRank(operands[0]);
+    DimsExpr dims;
+    createIE->getShapeAsDims(operands[0], dims);
+    inputsDims.emplace_back(dims);
+    return setOutputDimsFromOperand(operands[0]);
+  }
+
+  // Fallback for cases where operand rank is unknown (e.g., some QDQ models
+  // with custom ops producing unranked tensors). For unary ops, output shape
+  // equals input shape, and we can safely use the ranked result type when
+  // present.
+  ShapedType resType = dyn_cast<ShapedType>(op->getResult(0).getType());
+  if (resType && resType.hasRank()) {
+    outputRank = resType.getRank();
+    DimsExpr dims;
+    getIndexExprListFromShape(resType.getShape(), dims);
+    inputsDims.emplace_back(dims);
+    setOutputDims(dims);
+    return success();
+  }
+
+  return op->emitError("expected ranked unary operand or ranked result type");
 }
 
 bool ONNXUnaryOpShapeHelper::hasNoBroadcast(DimAnalysis *dimAnalysis) {

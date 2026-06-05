@@ -24,6 +24,20 @@ configure_file(
   COPYONLY
   )
 
+execute_process(
+  COMMAND ${Python3_EXECUTABLE} -c "import onnx"
+  RESULT_VARIABLE ONNX_PYTHON_IMPORT_RESULT
+  OUTPUT_QUIET
+  ERROR_QUIET
+  )
+
+if (NOT ONNX_PYTHON_IMPORT_RESULT EQUAL 0)
+  message(WARNING
+    "Python package 'onnx' is not available for ${Python3_EXECUTABLE}; "
+    "skipping docs/doc_example targets during the default build.")
+  return()
+endif()
+
 if (WIN32)
   set(OMRuntimeTestModelLibraryName add)
   set(OMRuntimeTestModelLibraryFiles ${CMAKE_CURRENT_BINARY_DIR}/${OMRuntimeTestModelLibraryName}${CMAKE_SHARED_LIBRARY_SUFFIX})

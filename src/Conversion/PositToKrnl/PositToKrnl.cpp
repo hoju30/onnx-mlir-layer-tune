@@ -12,6 +12,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 
 #include "src/Dialect/Posit/PositDialect.h"
 #include "src/Dialect/Posit/PositOps.h"
@@ -22,6 +23,9 @@
 #include "src/Dialect/Krnl/KrnlOps.hpp"
 
 #include "src/Conversion/PositToKrnl/Pattern/Math.cpp"
+
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 
 using namespace mlir;
 
@@ -58,7 +62,7 @@ static FlatSymbolRefAttr getOrInsertPositFromF32(ModuleOp module, OpBuilder &rew
     auto iN = rewriter.getIntegerType(gCastChainStorageBits);
     auto inTy = UnrankedMemRefType::get(f32, /*memorySpace=*/0);
     auto outTy = UnrankedMemRefType::get(iN, /*memorySpace=*/0);
-    auto fnTy = rewriter.getFunctionType({inTy, outTy}, {});
+    auto fnTy = rewriter.getFunctionType({inTy, outTy, rewriter.getI64Type()}, {});
     OpBuilder::InsertionGuard g(rewriter);
     rewriter.setInsertionPointToStart(module.getBody());
     auto fn = rewriter.create<func::FuncOp>(module.getLoc(), name, fnTy);
@@ -105,6 +109,86 @@ static FailureOr<SmallVector<Value, 4>> buildAllocDynamicDimsFromLike(
   return dynDims;
 }
 
+static FailureOr<SmallVector<Value, 4>> buildAllocDynamicDimsBestEffort(
+    OpBuilder &rewriter, Location loc, MemRefType allocTy, Value like) {
+  FailureOr<SmallVector<Value, 4>> fromLike =
+      buildAllocDynamicDimsFromLike(rewriter, loc, allocTy, like);
+  return fromLike;
+}
+
+static FailureOr<SmallVector<Value, 4>> buildAllocDynamicDimsForScalarBroadcast(
+    OpBuilder &rewriter, Location loc, MemRefType allocTy) {
+  if (!allocTy.hasRank())
+    return failure();
+  SmallVector<Value, 4> dynDims;
+  if (allocTy.hasStaticShape())
+    return dynDims;
+  for (int64_t i = 0, e = allocTy.getRank(); i < e; ++i) {
+    if (!allocTy.isDynamicDim(i))
+      continue;
+    dynDims.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 1));
+  }
+  return dynDims;
+}
+
+static MemRefType getIdentityMemRefType(MemRefType ty) {
+  return MemRefType::get(ty.getShape(), ty.getElementType());
+}
+
+static bool hasIdentityMemRefLayout(MemRefType ty) {
+  return ty.getLayout().isIdentity();
+}
+
+// Ensure runtime-call source descriptors are canonical contiguous memrefs.
+// For strided/subview-like memrefs, materialize a contiguous copy first.
+static FailureOr<Value> materializeContiguousMemRefForRead(
+    PatternRewriter &rewriter, Location loc, Value src) {
+  auto srcTy = dyn_cast<MemRefType>(src.getType());
+  if (!srcTy || !srcTy.hasRank())
+    return failure();
+  if (hasIdentityMemRefLayout(srcTy))
+    return src;
+
+  MemRefType idTy = getIdentityMemRefType(srcTy);
+  FailureOr<SmallVector<Value, 4>> maybeDynDims =
+      buildAllocDynamicDimsFromLike(rewriter, loc, idTy, src);
+  if (failed(maybeDynDims))
+    return failure();
+  Value packed = rewriter.create<memref::AllocOp>(loc, idTy, *maybeDynDims);
+  rewriter.create<memref::CopyOp>(loc, src, packed);
+  return packed;
+}
+
+static Value findBackingMemrefFromTensorViaUnrealized(Value tensorLike,
+    function_ref<bool(Type)> elemTypePred) {
+  Value cursor = tensorLike;
+  SmallPtrSet<Operation *, 16> visited;
+  while (auto cast = cursor.getDefiningOp<UnrealizedConversionCastOp>()) {
+    if (!visited.insert(cast).second)
+      break;
+    if (cast.getNumOperands() != 1)
+      break;
+    Value in = cast.getOperand(0);
+    if (auto memTy = dyn_cast<MemRefType>(in.getType())) {
+      if (elemTypePred(memTy.getElementType()))
+        return in;
+    }
+    if (auto tTy = dyn_cast<ShapedType>(in.getType())) {
+      if (!elemTypePred(tTy.getElementType()))
+        break;
+    } else {
+      break;
+    }
+    cursor = in;
+  }
+  return Value();
+}
+
+static bool isPositShapedType(Type t) {
+  auto st = dyn_cast<ShapedType>(t);
+  return st && isa<posit::PositType>(st.getElementType());
+}
+
 struct LowerF32ToPositBitsCastChain final
     : public OpRewritePattern<UnrealizedConversionCastOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -143,13 +227,22 @@ struct LowerF32ToPositBitsCastChain final
 
     Location loc = op.getLoc();
     Value src = pre.getOperand(0); // ranked memref<f32>
+    FailureOr<Value> maybePackedSrc =
+        materializeContiguousMemRefForRead(rewriter, loc, src);
+    if (failed(maybePackedSrc))
+      return failure();
+    src = *maybePackedSrc;
 
     // Allocate ranked memref<i8> for posit bits.
+    MemRefType runtimeDstMemref = dstMemref;
+    if (!hasIdentityMemRefLayout(runtimeDstMemref))
+      runtimeDstMemref = getIdentityMemRefType(dstMemref);
     FailureOr<SmallVector<Value, 4>> maybeDynDims =
-        buildAllocDynamicDimsFromLike(rewriter, loc, dstMemref, src);
+        buildAllocDynamicDimsFromLike(rewriter, loc, runtimeDstMemref, src);
     if (failed(maybeDynDims))
       return failure();
-    Value dst = rewriter.create<memref::AllocOp>(loc, dstMemref, *maybeDynDims);
+    Value dst = rewriter.create<memref::AllocOp>(
+        loc, runtimeDstMemref, *maybeDynDims);
 
     // Cast to unranked for CRunner-style runtime call.
     auto unrankedF32 = UnrankedMemRefType::get(rewriter.getF32Type(), 0);
@@ -160,10 +253,16 @@ struct LowerF32ToPositBitsCastChain final
 
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto callee = getOrInsertPositFromF32(module, rewriter);
-    rewriter.create<func::CallOp>(loc, callee, TypeRange{}, ValueRange{srcU, dstU});
+    Value qalignKey = rewriter.create<arith::ConstantIntOp>(loc, 0, 64);
+    rewriter.create<func::CallOp>(
+        loc, callee, TypeRange{}, ValueRange{srcU, dstU, qalignKey});
 
     // Replace last cast result with the real converted buffer.
-    rewriter.replaceOp(op, dst);
+    Value dstForReplace = dst;
+    if (runtimeDstMemref != dstMemref)
+      dstForReplace =
+          rewriter.create<memref::CastOp>(loc, dstMemref, dst).getResult();
+    rewriter.replaceOp(op, dstForReplace);
 
     // Clean up the now-dead casts.
     if (mid->use_empty())
@@ -210,13 +309,22 @@ struct LowerPositBitsToF32CastChain final
 
     Location loc = op.getLoc();
     Value src = pre.getOperand(0); // ranked memref<i8>
+    FailureOr<Value> maybePackedSrc =
+        materializeContiguousMemRefForRead(rewriter, loc, src);
+    if (failed(maybePackedSrc))
+      return failure();
+    src = *maybePackedSrc;
 
     // Allocate ranked memref<f32> for output floats.
+    MemRefType runtimeDstMemref = dstMemref;
+    if (!hasIdentityMemRefLayout(runtimeDstMemref))
+      runtimeDstMemref = getIdentityMemRefType(dstMemref);
     FailureOr<SmallVector<Value, 4>> maybeDynDims =
-        buildAllocDynamicDimsFromLike(rewriter, loc, dstMemref, src);
+        buildAllocDynamicDimsFromLike(rewriter, loc, runtimeDstMemref, src);
     if (failed(maybeDynDims))
       return failure();
-    Value dst = rewriter.create<memref::AllocOp>(loc, dstMemref, *maybeDynDims);
+    Value dst = rewriter.create<memref::AllocOp>(
+        loc, runtimeDstMemref, *maybeDynDims);
 
     // Cast to unranked for runtime call.
     auto unrankedI8 = UnrankedMemRefType::get(
@@ -229,12 +337,215 @@ struct LowerPositBitsToF32CastChain final
     auto callee = getOrInsertPositToF32(module, rewriter);
     rewriter.create<func::CallOp>(loc, callee, TypeRange{}, ValueRange{srcU, dstU});
 
-    rewriter.replaceOp(op, dst);
+    Value dstForReplace = dst;
+    if (runtimeDstMemref != dstMemref)
+      dstForReplace =
+          rewriter.create<memref::CastOp>(loc, dstMemref, dst).getResult();
+    rewriter.replaceOp(op, dstForReplace);
 
     if (mid->use_empty())
       rewriter.eraseOp(mid);
     if (pre->use_empty())
       rewriter.eraseOp(pre);
+    return success();
+  }
+};
+
+// [FIX] Generic variant of f32->posit->...->memref cast-chain lowering.
+// This handles extra placeholder tensor rank-casts between posit tensors, e.g.:
+//   tensor<f32> -> tensor<!posit> -> tensor<?x!posit> -> memref<?xi8>
+struct LowerF32ToPositBitsGenericCastChain final
+    : public OpRewritePattern<UnrealizedConversionCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(UnrealizedConversionCastOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+      return failure();
+
+    auto dstMemref = dyn_cast<MemRefType>(op.getResult(0).getType());
+    if (!dstMemref || !dstMemref.getElementType().isInteger(gCastChainStorageBits))
+      return failure();
+    if (!isPositShapedType(op.getOperand(0).getType()))
+      return failure();
+
+    SmallVector<UnrealizedConversionCastOp, 8> chain;
+    UnrealizedConversionCastOp bridge;
+    Value cursor = op.getOperand(0);
+    while (true) {
+      auto cast = cursor.getDefiningOp<UnrealizedConversionCastOp>();
+      if (!cast || cast.getNumOperands() != 1 || cast.getNumResults() != 1)
+        return failure();
+      chain.push_back(cast);
+
+      auto srcShaped = dyn_cast<ShapedType>(cast.getOperand(0).getType());
+      auto dstShaped = dyn_cast<ShapedType>(cast.getResult(0).getType());
+      if (!srcShaped || !dstShaped || !isa<posit::PositType>(dstShaped.getElementType()))
+        return failure();
+
+      Type srcElem = srcShaped.getElementType();
+      if (srcElem.isF32()) {
+        bridge = cast;
+        break;
+      }
+      if (!isa<posit::PositType>(srcElem))
+        return failure();
+      cursor = cast.getOperand(0);
+    }
+
+    Value srcMemref = findBackingMemrefFromTensorViaUnrealized(
+        bridge.getOperand(0), [](Type t) { return t.isF32(); });
+    if (!srcMemref)
+      return failure();
+    FailureOr<Value> maybePackedSrc =
+        materializeContiguousMemRefForRead(rewriter, op.getLoc(), srcMemref);
+    if (failed(maybePackedSrc))
+      return failure();
+    srcMemref = *maybePackedSrc;
+
+    Location loc = op.getLoc();
+    auto srcMemrefTy = dyn_cast<MemRefType>(srcMemref.getType());
+    MemRefType runtimeDstMemref = dstMemref;
+    if (!hasIdentityMemRefLayout(runtimeDstMemref))
+      runtimeDstMemref = getIdentityMemRefType(dstMemref);
+    FailureOr<SmallVector<Value, 4>> maybeDynDims = failure();
+    if (srcMemrefTy && srcMemrefTy.hasRank() && srcMemrefTy.getRank() == 0 &&
+        runtimeDstMemref.hasRank() && runtimeDstMemref.getRank() > 0) {
+      maybeDynDims =
+          buildAllocDynamicDimsForScalarBroadcast(rewriter, loc, runtimeDstMemref);
+    } else {
+      maybeDynDims =
+          buildAllocDynamicDimsBestEffort(
+              rewriter, loc, runtimeDstMemref, srcMemref);
+    }
+    if (failed(maybeDynDims))
+      return failure();
+    Value dst = rewriter.create<memref::AllocOp>(
+        loc, runtimeDstMemref, *maybeDynDims);
+
+    auto unrankedF32 = UnrankedMemRefType::get(rewriter.getF32Type(), 0);
+    auto unrankedI = UnrankedMemRefType::get(
+        rewriter.getIntegerType(gCastChainStorageBits), 0);
+    Value srcU = rewriter.create<memref::CastOp>(loc, unrankedF32, srcMemref);
+    Value dstU = rewriter.create<memref::CastOp>(loc, unrankedI, dst);
+
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto callee = getOrInsertPositFromF32(module, rewriter);
+    Value qalignKey = rewriter.create<arith::ConstantIntOp>(loc, 0, 64);
+    rewriter.create<func::CallOp>(
+        loc, callee, TypeRange{}, ValueRange{srcU, dstU, qalignKey});
+
+    Value dstForReplace = dst;
+    if (runtimeDstMemref != dstMemref)
+      dstForReplace =
+          rewriter.create<memref::CastOp>(loc, dstMemref, dst).getResult();
+    rewriter.replaceOp(op, dstForReplace);
+
+    for (auto c : chain)
+      if (c->use_empty())
+        rewriter.eraseOp(c);
+    return success();
+  }
+};
+
+// [FIX] Generic variant of posit->...->f32->memref cast-chain lowering.
+// Handles rank-only placeholder casts around the core posit->f32 bridge.
+struct LowerPositBitsToF32GenericCastChain final
+    : public OpRewritePattern<UnrealizedConversionCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(UnrealizedConversionCastOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+      return failure();
+
+    auto dstMemref = dyn_cast<MemRefType>(op.getResult(0).getType());
+    if (!dstMemref || !dstMemref.getElementType().isF32())
+      return failure();
+
+    auto srcShapedTop = dyn_cast<ShapedType>(op.getOperand(0).getType());
+    if (!srcShapedTop || !srcShapedTop.getElementType().isF32())
+      return failure();
+
+    SmallVector<UnrealizedConversionCastOp, 8> chain;
+    UnrealizedConversionCastOp bridge;
+    Value cursor = op.getOperand(0);
+    while (true) {
+      auto cast = cursor.getDefiningOp<UnrealizedConversionCastOp>();
+      if (!cast || cast.getNumOperands() != 1 || cast.getNumResults() != 1)
+        return failure();
+      chain.push_back(cast);
+
+      auto srcShaped = dyn_cast<ShapedType>(cast.getOperand(0).getType());
+      auto dstShaped = dyn_cast<ShapedType>(cast.getResult(0).getType());
+      if (!srcShaped || !dstShaped)
+        return failure();
+
+      Type srcElem = srcShaped.getElementType();
+      Type dstElem = dstShaped.getElementType();
+      if (isa<posit::PositType>(srcElem) && dstElem.isF32()) {
+        bridge = cast;
+        break;
+      }
+
+      if (srcElem == dstElem && (srcElem.isF32() || isa<posit::PositType>(srcElem))) {
+        cursor = cast.getOperand(0);
+        continue;
+      }
+      return failure();
+    }
+
+    Value srcMemref = findBackingMemrefFromTensorViaUnrealized(
+        bridge.getOperand(0), [](Type t) {
+          return t.isInteger(gCastChainStorageBits);
+        });
+    if (!srcMemref)
+      return failure();
+    FailureOr<Value> maybePackedSrc =
+        materializeContiguousMemRefForRead(rewriter, op.getLoc(), srcMemref);
+    if (failed(maybePackedSrc))
+      return failure();
+    srcMemref = *maybePackedSrc;
+
+    Location loc = op.getLoc();
+    auto srcMemrefTy = dyn_cast<MemRefType>(srcMemref.getType());
+    MemRefType runtimeDstMemref = dstMemref;
+    if (!hasIdentityMemRefLayout(runtimeDstMemref))
+      runtimeDstMemref = getIdentityMemRefType(dstMemref);
+    FailureOr<SmallVector<Value, 4>> maybeDynDims = failure();
+    if (srcMemrefTy && srcMemrefTy.hasRank() && srcMemrefTy.getRank() == 0 &&
+        runtimeDstMemref.hasRank() && runtimeDstMemref.getRank() > 0) {
+      maybeDynDims =
+          buildAllocDynamicDimsForScalarBroadcast(rewriter, loc, runtimeDstMemref);
+    } else {
+      maybeDynDims =
+          buildAllocDynamicDimsBestEffort(
+              rewriter, loc, runtimeDstMemref, srcMemref);
+    }
+    if (failed(maybeDynDims))
+      return failure();
+    Value dst = rewriter.create<memref::AllocOp>(
+        loc, runtimeDstMemref, *maybeDynDims);
+
+    auto unrankedI = UnrankedMemRefType::get(
+        rewriter.getIntegerType(gCastChainStorageBits), 0);
+    auto unrankedF32 = UnrankedMemRefType::get(rewriter.getF32Type(), 0);
+    Value srcU = rewriter.create<memref::CastOp>(loc, unrankedI, srcMemref);
+    Value dstU = rewriter.create<memref::CastOp>(loc, unrankedF32, dst);
+
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto callee = getOrInsertPositToF32(module, rewriter);
+    rewriter.create<func::CallOp>(loc, callee, TypeRange{}, ValueRange{srcU, dstU});
+
+    Value dstForReplace = dst;
+    if (runtimeDstMemref != dstMemref)
+      dstForReplace =
+          rewriter.create<memref::CastOp>(loc, dstMemref, dst).getResult();
+    rewriter.replaceOp(op, dstForReplace);
+
+    for (auto c : chain)
+      if (c->use_empty())
+        rewriter.eraseOp(c);
     return success();
   }
 };
@@ -298,8 +609,11 @@ struct LowerONNXReturnToFuncReturn final
   mlir::LogicalResult matchAndRewrite(
       mlir::ONNXReturnOp op, OpAdaptor adaptor,
       mlir::ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<mlir::func::ReturnOp>(
-        op, adaptor.getOperands());
+    // Use adaptor operands so type conversion can feed converted values when
+    // the pass is running after ONNX/Krnl lowering. Falling back to the original
+    // operands can leave tensor-typed onnx.Return behind and later krnl->llvm
+    // reports an illegal onnx.Return.
+    rewriter.replaceOpWithNewOp<mlir::func::ReturnOp>(op, adaptor.getOperands());
     return mlir::success();
   }
 };
@@ -462,6 +776,169 @@ struct EraseDeadUnrealizedCast final
   }
 };
 
+// [FIX] Lower tensor.from_elements + unrealized_cast(memref) to concrete
+// memref allocation/stores so tensor ops do not leak into krnl->llvm.
+struct LowerTensorFromElementsCastToMemref final
+    : public OpRewritePattern<UnrealizedConversionCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(UnrealizedConversionCastOp op,
+      PatternRewriter &rewriter) const override {
+    if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+      return failure();
+
+    auto dstMemrefTy = dyn_cast<MemRefType>(op.getResult(0).getType());
+    if (!dstMemrefTy || !dstMemrefTy.hasRank() || dstMemrefTy.getRank() != 1 ||
+        !dstMemrefTy.hasStaticShape())
+      return failure();
+
+    auto fromElems = op.getOperand(0).getDefiningOp<tensor::FromElementsOp>();
+    if (!fromElems)
+      return failure();
+    auto srcTensorTy = dyn_cast<RankedTensorType>(fromElems.getType());
+    if (!srcTensorTy || srcTensorTy.getRank() != 1 || !srcTensorTy.hasStaticShape())
+      return failure();
+
+    int64_t len = srcTensorTy.getShape()[0];
+    if (len != dstMemrefTy.getShape()[0])
+      return failure();
+    if (srcTensorTy.getElementType() != dstMemrefTy.getElementType())
+      return failure();
+    if (static_cast<int64_t>(fromElems.getElements().size()) != len)
+      return failure();
+
+    Value alloc = rewriter.create<memref::AllocOp>(op.getLoc(), dstMemrefTy);
+    for (int64_t i = 0; i < len; ++i) {
+      Value idx = rewriter.create<arith::ConstantIndexOp>(op.getLoc(), i);
+      rewriter.create<memref::StoreOp>(
+          op.getLoc(), fromElems.getElements()[i], alloc, ValueRange{idx});
+    }
+
+    rewriter.replaceOp(op, alloc);
+    if (fromElems->use_empty())
+      rewriter.eraseOp(fromElems);
+    return success();
+  }
+};
+
+// [FIX] Prevent tensor.dim on placeholder posit tensors from leaking to
+// krnl->llvm by redirecting dim queries to the underlying memref source.
+struct LowerTensorDimOnCastedMemref final
+    : public OpRewritePattern<tensor::DimOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      tensor::DimOp op, PatternRewriter &rewriter) const override {
+    Value memrefSrc = op.getSource();
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      if (auto cast = memrefSrc.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (cast.getNumOperands() != 1)
+          break;
+        memrefSrc = cast.getOperand(0);
+        changed = true;
+        continue;
+      }
+      if (auto memrefCast = memrefSrc.getDefiningOp<memref::CastOp>()) {
+        memrefSrc = memrefCast.getSource();
+        changed = true;
+        continue;
+      }
+    }
+
+    if (!isa<MemRefType, UnrankedMemRefType>(memrefSrc.getType()))
+      return failure();
+
+    Value dim = rewriter.create<memref::DimOp>(
+        op.getLoc(), memrefSrc, op.getIndex());
+    rewriter.replaceOp(op, dim);
+    return success();
+  }
+};
+
+static bool isPositF32BridgeRuntime(StringRef callee) {
+  return callee.starts_with("_mlir_ciface_posit_from_f32_") ||
+         callee.starts_with("_mlir_ciface_posit_to_f32_");
+}
+
+static LogicalResult verifyPositRuntimeDescriptorCalls(ModuleOp module) {
+  bool ok = true;
+  module.walk([&](func::CallOp callOp) {
+    StringRef callee = callOp.getCallee();
+    if (!isPositF32BridgeRuntime(callee))
+      return;
+
+    const bool isFrom =
+        callee.starts_with("_mlir_ciface_posit_from_f32_");
+    const unsigned expectedOperands = isFrom ? 3u : 2u;
+    if (callOp.getNumOperands() != expectedOperands) {
+      callOp.emitError("posit runtime bridge has unexpected operand count");
+      ok = false;
+      return;
+    }
+
+    for (unsigned i = 0; i < 2; ++i) {
+      Value arg = callOp.getOperand(i);
+      Value ranked = arg;
+      if (auto cast = ranked.getDefiningOp<memref::CastOp>())
+        ranked = cast.getSource();
+
+      auto memTy = dyn_cast<MemRefType>(ranked.getType());
+      if (!memTy || !memTy.hasRank()) {
+        callOp.emitError("runtime bridge arg ")
+            << i << " must come from ranked memref source";
+        ok = false;
+        continue;
+      }
+
+      if (!hasIdentityMemRefLayout(memTy)) {
+        callOp.emitError("runtime bridge arg ")
+            << i
+            << " has non-identity memref layout; descriptor may be unsafe";
+        ok = false;
+      }
+
+      if (i == 1 && !ranked.getDefiningOp<memref::AllocOp>()) {
+        callOp.emitError("runtime bridge destination arg must be memref.alloc");
+        ok = false;
+      }
+
+      Type elemTy = memTy.getElementType();
+      if (isFrom) {
+        if (i == 0 && !elemTy.isF32()) {
+          callOp.emitError("posit_from_f32 source must be memref<...xf32>");
+          ok = false;
+        }
+        if (i == 1 && !elemTy.isInteger(gCastChainStorageBits)) {
+          callOp.emitError("posit_from_f32 destination must match posit storage bits i")
+              << gCastChainStorageBits;
+          ok = false;
+        }
+      } else {
+        if (i == 0 && !elemTy.isInteger(gCastChainStorageBits)) {
+          callOp.emitError("posit_to_f32 source must match posit storage bits i")
+              << gCastChainStorageBits;
+          ok = false;
+        }
+        if (i == 1 && !elemTy.isF32()) {
+          callOp.emitError("posit_to_f32 destination must be memref<...xf32>");
+          ok = false;
+        }
+      }
+    }
+
+    if (isFrom) {
+      Type keyTy = callOp.getOperand(2).getType();
+      if (!llvm::isa<IntegerType, IndexType>(keyTy)) {
+        callOp.emitError("posit_from_f32 qalign_key must be integer/index");
+        ok = false;
+      }
+    }
+  });
+  return success(ok);
+}
+
 
 struct ConvertPositToKrnlPass
     : public PassWrapper<ConvertPositToKrnlPass, OperationPass<ModuleOp>> {
@@ -480,6 +957,7 @@ struct ConvertPositToKrnlPass
                     func::FuncDialect,
                     memref::MemRefDialect,
                     arith::ArithDialect,
+                    tensor::TensorDialect,
                     mlir::KrnlDialect>();
   }
 
@@ -511,15 +989,57 @@ struct ConvertPositToKrnlPass
           hasPositCastChain = true;
       }
     });
-    if (!hasPositOp && !hasPositCastChain)
+    MLIRContext &ctx = getContext();
+
+    if (!hasPositOp && !hasPositCastChain) {
+      // This pass is invoked twice in the build pipeline. In the second
+      // invocation, after convert-onnx-to-krnl, some models may have no Posit
+      // ops left but still retain ONNX terminator/metadata ops. Clean those up
+      // here so krnl->llvm never sees onnx.Return.
+      if (!hasResidualONNXOp) {
+        RewritePatternSet cleanupPatterns(&ctx);
+        cleanupPatterns.add<LowerONNXReturnToFuncReturn, EraseONNXEntryPoint,
+                            EraseONNXNoValueIfDead>(&ctx);
+        if (failed(applyPatternsAndFoldGreedily(module, std::move(cleanupPatterns))))
+          signalPassFailure();
+      }
       return;
+    }
     const bool castOnlyMode = !hasPositOp && hasPositCastChain;
     const bool mixedWithONNX = hasResidualONNXOp;
 
-    MLIRContext &ctx = getContext();
-
-    const unsigned localNbits = nbits;
-    const unsigned localEs = es;
+    unsigned localNbits = nbits;
+    unsigned localEs = es;
+    auto maybeAdoptPositTypeConfig = [&](Type ty) -> bool {
+      if (auto shapedTy = dyn_cast<ShapedType>(ty))
+        ty = shapedTy.getElementType();
+      if (auto positTy = dyn_cast<posit::PositType>(ty)) {
+        localNbits = positTy.getNbits();
+        localEs = positTy.getEs();
+        return true;
+      }
+      return false;
+    };
+    if (localNbits == 8 && localEs == 0) {
+      bool foundPositType = false;
+      module.walk([&](Operation *op) {
+        if (foundPositType)
+          return WalkResult::interrupt();
+        for (Value operand : op->getOperands()) {
+          if (maybeAdoptPositTypeConfig(operand.getType())) {
+            foundPositType = true;
+            return WalkResult::interrupt();
+          }
+        }
+        for (Type resultTy : op->getResultTypes()) {
+          if (maybeAdoptPositTypeConfig(resultTy)) {
+            foundPositType = true;
+            return WalkResult::interrupt();
+          }
+        }
+        return WalkResult::advance();
+      });
+    }
     PositToKrnlTypeConverter typeConverter(localNbits, localEs, &ctx);
     gCastChainPositNbits = localNbits;
     gCastChainPositEs = localEs;
@@ -527,9 +1047,16 @@ struct ConvertPositToKrnlPass
 
     if (castOnlyMode) {
       RewritePatternSet castChainPatterns(&ctx);
-      castChainPatterns.add<LowerF32ToPositBitsCastChain, LowerPositBitsToF32CastChain,
-                            LowerTensorConstCastToKrnlGlobal>(&ctx);
+      castChainPatterns.add<LowerF32ToPositBitsCastChain,
+                            LowerPositBitsToF32CastChain,
+                            LowerF32ToPositBitsGenericCastChain,
+                            LowerPositBitsToF32GenericCastChain,
+                            LowerTensorConstCastToKrnlGlobal,
+                            LowerTensorFromElementsCastToMemref,
+                            LowerTensorDimOnCastedMemref>(&ctx);
       if (failed(applyPatternsAndFoldGreedily(module, std::move(castChainPatterns))))
+        signalPassFailure();
+      if (failed(verifyPositRuntimeDescriptorCalls(module)))
         signalPassFailure();
       return;
     }
@@ -546,16 +1073,25 @@ struct ConvertPositToKrnlPass
     populatePositToKrnlConversionPattern(
         typeConverter, patterns, &ctx, localNbits, localEs);
 
-    // [FIX] Eliminate leftover unrealized casts carrying !posit.type.
-    patterns.add<LowerONNXReturnToFuncReturn, EraseONNXNoValueIfDead, EraseONNXEntryPoint>(typeConverter, &ctx);
+    // In mixed ONNX+Posit mode, keep ONNXReturn alive so the later
+    // ONNX->Krnl pipeline can convert the function signature and return types
+    // consistently. Replacing it here with func.return(memref) while the
+    // enclosing func still returns tensor leads to tensor/memref mismatches.
+    if (!mixedWithONNX)
+      patterns.add<LowerONNXReturnToFuncReturn>(typeConverter, &ctx);
+    patterns.add<EraseONNXNoValueIfDead, EraseONNXEntryPoint>(typeConverter,
+                                                              &ctx);
     patterns.add<LowerTensorConstCastToKrnlGlobal>(&ctx);
-    patterns.add<LowerF32ToPositBitsCastChain, LowerPositBitsToF32CastChain>(&ctx);
+    patterns.add<LowerF32ToPositBitsCastChain, LowerPositBitsToF32CastChain,
+                 LowerF32ToPositBitsGenericCastChain,
+                 LowerPositBitsToF32GenericCastChain>(&ctx);
     patterns.add<LowerUnrealizedCastToPositConvert>(typeConverter, &ctx);
     patterns.add<EraseDeadUnrealizedCast>(typeConverter, &ctx);
 
     ConversionTarget target(ctx);
     target.addLegalDialect<memref::MemRefDialect,
-                           arith::ArithDialect, mlir::KrnlDialect,
+                           arith::ArithDialect, tensor::TensorDialect,
+                           mlir::KrnlDialect,
                            func::FuncDialect>();
 
     // dynamic legality
@@ -578,7 +1114,15 @@ struct ConvertPositToKrnlPass
       target.addIllegalOp<UnrealizedConversionCastOp>();
     else
       target.addLegalOp<UnrealizedConversionCastOp>();
-    target.addIllegalOp<ONNXReturnOp, ONNXNoneOp, ONNXEntryPointOp>();
+    if (mixedWithONNX) {
+      // Keep ONNXReturn/ONNXNone alive for later ONNX->Krnl lowering when the
+      // mixed graph still contains tensor-typed ONNX ops. This avoids
+      // func.return(memref) mismatching a tensor-returning function signature.
+      target.addIllegalOp<ONNXEntryPointOp>();
+      target.addLegalOp<ONNXReturnOp, ONNXNoneOp>();
+    } else {
+      target.addIllegalOp<ONNXReturnOp, ONNXNoneOp, ONNXEntryPointOp>();
+    }
 
     // [MOD][2026-01-14] 把 Posit ops 變 illegal，逼它們一定要被轉掉
     target.addIllegalOp<posit::ConstantOp, posit::AddOp, posit::SubOp,
@@ -602,7 +1146,10 @@ struct ConvertPositToKrnlPass
     // In mixed ONNX+Posit mode, unrealized_conversion_cast is legal in the
     // conversion target, so apply these chain-lowering rewrites greedily here.
     RewritePatternSet castChainPatterns(&ctx);
-    castChainPatterns.add<LowerF32ToPositBitsCastChain, LowerPositBitsToF32CastChain>(&ctx);
+    castChainPatterns.add<LowerF32ToPositBitsCastChain,
+        LowerPositBitsToF32CastChain, LowerF32ToPositBitsGenericCastChain,
+        LowerPositBitsToF32GenericCastChain, LowerTensorFromElementsCastToMemref,
+        LowerTensorDimOnCastedMemref>(&ctx);
     if (failed(applyPatternsAndFoldGreedily(module, std::move(castChainPatterns))))
       signalPassFailure();
 
@@ -674,6 +1221,9 @@ struct ConvertPositToKrnlPass
         changed = true;
       }
     }
+
+    if (failed(verifyPositRuntimeDescriptorCalls(module)))
+      signalPassFailure();
   }
 };
 

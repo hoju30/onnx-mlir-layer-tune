@@ -37,20 +37,88 @@ struct ONNXCustomOpLowering : public OpConversionPattern<ONNXCustomOp> {
         create(rewriter, loc);
     IndexExprScope scope(create.krnlIE);
 
-    // Get shape.
+    // Get shape when custom op exposes a supported shape inference pattern.
     ONNXCustomOpShapeHelper shapeHelper(op, operands, &create.krnlIE);
-    shapeHelper.computeShapeAndAssertOnFailure();
+    const bool hasShapeHelper = shapeHelper.isImplemented();
+    if (hasShapeHelper)
+      shapeHelper.computeShapeAndAssertOnFailure();
 
     // Prepare outputs for krnl.call
     SmallVector<Type, 4> outputMemRefTypes;
     SmallVector<Value, 4> outputAllocs;
     for (size_t idx = 0; idx < op->getResultTypes().size(); idx++) {
       Type ty = op->getResultTypes()[idx];
-      MemRefType outputMemRefType =
-          mlir::cast<MemRefType>(typeConverter->convertType(ty));
+      Type convertedType = typeConverter->convertType(ty);
+      MemRefType outputMemRefType;
+      DimsExpr allocDims;
+
+      if (auto rankedTy = mlir::dyn_cast<MemRefType>(convertedType)) {
+        outputMemRefType = rankedTy;
+      } else if (auto unrankedTy =
+                     mlir::dyn_cast<UnrankedMemRefType>(convertedType)) {
+        // Materialize a ranked memref for unranked outputs.
+        if (hasShapeHelper) {
+          DimsExpr outputDims = shapeHelper.getOutputDims(idx);
+          SmallVector<int64_t, 4> shape;
+          shape.reserve(outputDims.size());
+          for (const IndexExpr &dim : outputDims) {
+            shape.emplace_back(
+                dim.isLiteral() ? dim.getLiteral() : ShapedType::kDynamic);
+          }
+          outputMemRefType =
+              MemRefType::get(shape, unrankedTy.getElementType());
+        } else {
+          // Fallback for custom ops without shape helper support:
+          // infer output rank/shape from the first ranked memref input.
+          Value shapeLikeOperand;
+          MemRefType shapeLikeType;
+          for (Value operand : operands) {
+            if (auto operandTy = mlir::dyn_cast<MemRefType>(operand.getType())) {
+              shapeLikeOperand = operand;
+              shapeLikeType = operandTy;
+              break;
+            }
+          }
+          if (!shapeLikeOperand || !shapeLikeType) {
+            return rewriter.notifyMatchFailure(customOp,
+                "cannot infer ranked output shape for unranked custom op");
+          }
+
+          SmallVector<int64_t, 4> shape(shapeLikeType.getShape().begin(),
+              shapeLikeType.getShape().end());
+          outputMemRefType =
+              MemRefType::get(shape, unrankedTy.getElementType());
+          for (int64_t i = 0, e = shapeLikeType.getRank(); i < e; ++i) {
+            if (shapeLikeType.isDynamicDim(i)) {
+              Value dynDim = create.mem.dim(shapeLikeOperand, i);
+              allocDims.emplace_back(DimIndexExpr(dynDim));
+            } else {
+              allocDims.emplace_back(LiteralIndexExpr(shapeLikeType.getDimSize(i)));
+            }
+          }
+        }
+      } else {
+        return rewriter.notifyMatchFailure(
+            customOp, "custom op result is not a memref type after conversion");
+      }
+
       outputMemRefTypes.emplace_back(outputMemRefType);
-      Value alloc = create.mem.alignedAlloc(
-          outputMemRefType, shapeHelper.getOutputDims(idx));
+      if (allocDims.empty()) {
+        if (hasShapeHelper) {
+          allocDims = shapeHelper.getOutputDims(idx);
+        } else {
+          for (int64_t i = 0, e = outputMemRefType.getRank(); i < e; ++i) {
+            if (outputMemRefType.isDynamicDim(i)) {
+              return rewriter.notifyMatchFailure(customOp,
+                  "dynamic custom op output needs shape helper or shape-like input");
+            }
+            allocDims.emplace_back(
+                LiteralIndexExpr(outputMemRefType.getDimSize(i)));
+          }
+        }
+      }
+
+      Value alloc = create.mem.alignedAlloc(outputMemRefType, allocDims);
       outputAllocs.emplace_back(alloc);
     }
 

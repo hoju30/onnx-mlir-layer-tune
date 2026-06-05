@@ -105,6 +105,46 @@ Value allocOrReuse(MemRefBuilder &create, Operation *op,
   }
 }
 
+// Materialize a ranked memref output type for ONNX->Krnl lowering.
+// Some models keep unranked tensor/memref types around late in the pipeline;
+// elementwise lowering requires a ranked memref for allocation and loops.
+static FailureOr<MemRefType> getRankedOutputMemRefType(
+    const TypeConverter &converter,
+    Type outputType, int64_t fallbackRank = -1) {
+  if (auto memRefType = mlir::dyn_cast<MemRefType>(outputType))
+    return memRefType;
+
+  Type convertedType = converter.convertType(outputType);
+  if (auto memRefType = mlir::dyn_cast_or_null<MemRefType>(convertedType))
+    return memRefType;
+
+  Type elementType = nullptr;
+  if (auto shapedType = mlir::dyn_cast<ShapedType>(outputType))
+    elementType = shapedType.getElementType();
+  else if (auto baseMemRefType =
+               mlir::dyn_cast_or_null<BaseMemRefType>(convertedType))
+    elementType = baseMemRefType.getElementType();
+
+  if (!elementType)
+    return failure();
+
+  int64_t rank = fallbackRank;
+  if (rank < 0) {
+    if (auto shapedType = mlir::dyn_cast<ShapedType>(outputType);
+        shapedType && shapedType.hasRank())
+      rank = shapedType.getRank();
+    else if (auto baseMemRefType =
+                 mlir::dyn_cast_or_null<BaseMemRefType>(convertedType);
+             baseMemRefType && baseMemRefType.hasRank())
+      rank = baseMemRefType.getRank();
+  }
+  if (rank < 0)
+    return failure();
+
+  SmallVector<int64_t, 4> dynShape(rank, ShapedType::kDynamic);
+  return MemRefType::get(dynShape, elementType);
+}
+
 // =============================================================================
 // Template for functions that can be used as is
 
@@ -2074,7 +2114,7 @@ struct ONNXElementwiseUnaryOpLowering
     // Just call scalar computation and return the result. This is efficient
     // when elementwise ops are used as activations for ops like LSTM/GRU/RNN.
     if (!mlir::isa<TensorType>(X.getType()) &&
-        !mlir::isa<MemRefType>(X.getType())) {
+        !mlir::isa<BaseMemRefType>(X.getType())) {
       SmallVector<Value> args;
       args.emplace_back(X);
       // Load the remaining (scalar) values.
@@ -2084,7 +2124,7 @@ struct ONNXElementwiseUnaryOpLowering
           continue;
         }
         assert(!mlir::isa<TensorType>(operands[i].getType()) &&
-               !mlir::isa<MemRefType>(operands[i].getType()) &&
+               !mlir::isa<BaseMemRefType>(operands[i].getType()) &&
                "unary expected scalar additional values");
         args.emplace_back(operands[i]);
       }
@@ -2094,25 +2134,39 @@ struct ONNXElementwiseUnaryOpLowering
       return success();
     }
 
-    // Convert the output type to MemRefType.
-    Type outputTensorType = elmsOp.getResult().getType();
-    Type convertedType = this->typeConverter->convertType(outputTensorType);
-    int64_t alignment =
-        KrnlTypeConverter::getDefaultAllocAlignment(outputTensorType);
-    assert(convertedType && mlir::isa<MemRefType>(convertedType) &&
-           "Failed to convert type to MemRefType");
-    MemRefType outputMemRefType = mlir::cast<MemRefType>(convertedType);
-    int64_t outputRank = outputMemRefType.getRank();
-    Type outputElementType = outputMemRefType.getElementType();
-
-    // In unary, we don't have any broadcast, and thus our target is to fully
-    // collapse the loop to a 1D loop.
-    int64_t collapsedInnermostLoops = outputRank;
-
+    // Some QDQ graphs carry unranked memrefs into unary ops (e.g., output of a
+    // custom QLinearAdd before DequantizeLinear). Materialize a ranked view so
+    // dim/load generation can proceed.
     // Shape helper.
     MDBuilder create(rewriter, loc);
     ONNXUnaryOpShapeHelper shapeHelper(op, operands, &create.krnlIE);
     shapeHelper.computeShapeAndAssertOnFailure();
+
+    Type outputTensorType = elmsOp.getResult().getType();
+    int64_t alignment =
+        KrnlTypeConverter::getDefaultAllocAlignment(outputTensorType);
+    int64_t outputRankFromShape = shapeHelper.getOutputDims().size();
+    FailureOr<MemRefType> outputMemRefTypeOr =
+        getRankedOutputMemRefType(
+            *this->typeConverter, outputTensorType, outputRankFromShape);
+    if (failed(outputMemRefTypeOr))
+      return rewriter.notifyMatchFailure(
+          op, "failed to materialize ranked memref output type");
+    MemRefType outputMemRefType = *outputMemRefTypeOr;
+    int64_t outputRank = outputMemRefType.getRank();
+    Type outputElementType = outputMemRefType.getElementType();
+
+    if (auto xBaseMemRef = mlir::dyn_cast<BaseMemRefType>(X.getType());
+        xBaseMemRef && !xBaseMemRef.hasRank()) {
+      SmallVector<int64_t, 4> xShape(outputRank, ShapedType::kDynamic);
+      MemRefType rankedXType =
+          MemRefType::get(xShape, xBaseMemRef.getElementType());
+      X = rewriter.create<memref::CastOp>(loc, rankedXType, X);
+    }
+
+    // In unary, we don't have any broadcast, and thus our target is to fully
+    // collapse the loop to a 1D loop.
+    int64_t collapsedInnermostLoops = outputRank;
     LLVM_DEBUG({
       llvm::dbgs() << "Look at unary elementwise op: " << op->getName() << "\n";
       op->dump();
@@ -2149,6 +2203,55 @@ struct ONNXElementwiseUnaryOpLowering
     opFusionHelper.findFusibleOps();
     outputMemRefType = opFusionHelper.getOutputType(outputMemRefType);
 
+    auto loadUnaryAdditionalValue = [&](const KrnlBuilder &createKrnl,
+                                        Value operand,
+                                        ValueRange loopInd) -> Value {
+      if (isScalarValue(operand))
+        return create.krnl.load(operand);
+      if (isNoneValue(operand))
+        return operand;
+
+      // ONNXDequantizeLinear allows per-axis scale/zero-point tensors.
+      // Load by axis index (or conservative index-0 fallback) instead of
+      // assuming scalar additional operands.
+      if constexpr (std::is_same_v<ElementwiseUnaryOp,
+                        mlir::ONNXDequantizeLinearOp>) {
+        if (auto shapedTy = mlir::dyn_cast<ShapedType>(operand.getType());
+            shapedTy && shapedTy.hasRank()) {
+          int64_t rank = shapedTy.getRank();
+          int64_t xRank = static_cast<int64_t>(loopInd.size());
+          if (rank == 1 && xRank > 0) {
+            auto dqOp = mlir::cast<mlir::ONNXDequantizeLinearOp>(op);
+            int64_t axis = dqOp.getAxis();
+            if (axis < 0)
+              axis += xRank;
+            if (axis < 0 || axis >= xRank)
+              axis = 0;
+            SmallVector<Value, 1> idx = {loopInd[axis]};
+            return createKrnl.load(operand, idx);
+          }
+          if (rank == xRank && xRank > 0)
+            return createKrnl.load(operand, loopInd);
+          if (rank > 0) {
+            SmallVector<Value, 4> idx(rank,
+                rewriter.create<arith::ConstantIndexOp>(loc, 0));
+            return createKrnl.load(operand, idx);
+          }
+        }
+      }
+
+      // Generic conservative fallback for ranked non-scalar tensors.
+      if (auto shapedTy = mlir::dyn_cast<ShapedType>(operand.getType());
+          shapedTy && shapedTy.hasRank() && shapedTy.getRank() > 0) {
+        SmallVector<Value, 4> idx(shapedTy.getRank(),
+            rewriter.create<arith::ConstantIndexOp>(loc, 0));
+        return createKrnl.load(operand, idx);
+      }
+
+      // Preserve previous behavior for true scalar additional operands.
+      return create.krnl.load(operand);
+    };
+
     // Insert an allocation for the result of this operation.
     Value alloc = allocOrReuse(create.mem, op, operands, outputMemRefType,
         shapeHelper.getOutputDims(), alignment);
@@ -2174,9 +2277,8 @@ struct ONNXElementwiseUnaryOpLowering
                 args.emplace_back(operands[i]);
                 continue;
               }
-              assert(isScalarValue(operands[i]) &&
-                     "unary expected scalar additional values");
-              Value loadedVal = create.krnl.load(operands[i]);
+              Value loadedVal =
+                  loadUnaryAdditionalValue(createKrnl, operands[i], loopInd);
               args.emplace_back(loadedVal);
             }
             auto loweredOpResult = emitScalarOpFor<ElementwiseUnaryOp>(
@@ -2196,9 +2298,7 @@ struct ONNXElementwiseUnaryOpLowering
           args.emplace_back(operands[i]);
           continue;
         }
-        assert(isScalarValue(operands[i]) &&
-               "unary expected scalar additional values");
-        Value loadedVal = create.krnl.load(operands[i]);
+        Value loadedVal = loadUnaryAdditionalValue(create.krnl, operands[i], {});
         args.emplace_back(loadedVal);
       }
       auto loweredOpResult = emitScalarOpFor<ElementwiseUnaryOp>(
@@ -2251,22 +2351,25 @@ struct ONNXElementwiseBinaryOpLowering
     ValueRange operands = adaptor.getOperands();
     Location loc = ONNXLoc<ElementwiseBinaryOp>(op);
 
-    // Convert the output type to MemRefType.
-    Type outputTensorType = elmsOp.getResult().getType();
-    Type convertedType = this->typeConverter->convertType(outputTensorType);
-    int64_t alignment =
-        KrnlTypeConverter::getDefaultAllocAlignment(outputTensorType);
-    assert(convertedType && mlir::isa<MemRefType>(convertedType) &&
-           "Failed to convert type to MemRefType");
-    MemRefType outputMemRefType = mlir::cast<MemRefType>(convertedType);
-    Type outputElementType = outputMemRefType.getElementType();
-    int64_t outputRank = outputMemRefType.getRank();
-
     // Shape helper.
     MDBuilder create(rewriter, loc);
     ONNXBroadcastOpShapeHelper shapeHelper(
         op, operands, &create.krnlIE, nullptr, isUniBroadcasting);
     shapeHelper.computeShapeAndAssertOnFailure();
+
+    Type outputTensorType = elmsOp.getResult().getType();
+    int64_t alignment =
+        KrnlTypeConverter::getDefaultAllocAlignment(outputTensorType);
+    int64_t outputRankFromShape = shapeHelper.getOutputDims().size();
+    FailureOr<MemRefType> outputMemRefTypeOr =
+        getRankedOutputMemRefType(
+            *this->typeConverter, outputTensorType, outputRankFromShape);
+    if (failed(outputMemRefTypeOr))
+      return rewriter.notifyMatchFailure(
+          op, "failed to materialize ranked memref output type");
+    MemRefType outputMemRefType = *outputMemRefTypeOr;
+    Type outputElementType = outputMemRefType.getElementType();
+    int64_t outputRank = outputMemRefType.getRank();
 
     LLVM_DEBUG({
       llvm::dbgs() << "Look at binary elementwise op: " << op->getName()
@@ -2422,21 +2525,24 @@ struct ONNXElementwiseVariadicOpLowering
     ValueRange operands = adaptor.getOperands();
     unsigned numArgs = elmsOp.getNumOperands();
 
-    // Convert the output type to MemRefType.
-    Type outputTensorType = elmsOp.getResult().getType();
-    Type convertedType = this->typeConverter->convertType(outputTensorType);
-    int64_t alignment =
-        KrnlTypeConverter::getDefaultAllocAlignment(outputTensorType);
-    assert(convertedType && mlir::isa<MemRefType>(convertedType) &&
-           "Failed to convert type to MemRefType");
-    MemRefType outputMemRefType = mlir::cast<MemRefType>(convertedType);
-    Type outputElementType = outputMemRefType.getElementType();
-    int64_t outputRank = outputMemRefType.getRank();
-
     // Shape helper.
     MDBuilder create(rewriter, loc);
     ONNXBroadcastOpShapeHelper shapeHelper(op, operands, &create.krnlIE);
     shapeHelper.computeShapeAndAssertOnFailure();
+
+    Type outputTensorType = elmsOp.getResult().getType();
+    int64_t alignment =
+        KrnlTypeConverter::getDefaultAllocAlignment(outputTensorType);
+    int64_t outputRankFromShape = shapeHelper.getOutputDims().size();
+    FailureOr<MemRefType> outputMemRefTypeOr =
+        getRankedOutputMemRefType(
+            *this->typeConverter, outputTensorType, outputRankFromShape);
+    if (failed(outputMemRefTypeOr))
+      return rewriter.notifyMatchFailure(
+          op, "failed to materialize ranked memref output type");
+    MemRefType outputMemRefType = *outputMemRefTypeOr;
+    Type outputElementType = outputMemRefType.getElementType();
+    int64_t outputRank = outputMemRefType.getRank();
     LLVM_DEBUG({
       llvm::dbgs() << "Look at variadic elementwise op: " << op->getName()
                    << "\n";
@@ -2600,12 +2706,6 @@ struct ONNXWhereOpLowering : public ConversionPattern {
         StringAttr::get(op->getContext(), ONNXWhereOp::getOperationName()),
         op->getLoc());
 
-    // Convert the output type to MemRefType.
-    Type convertedType = typeConverter->convertType(*op->result_type_begin());
-    assert(convertedType && mlir::isa<MemRefType>(convertedType) &&
-           "Failed to convert type to MemRefType");
-    MemRefType outputMemRefType = mlir::cast<MemRefType>(convertedType);
-    int64_t outputRank = outputMemRefType.getRank();
     ONNXWhereOpAdaptor operandAdaptor(operands);
 
     // Shape helper.
@@ -2614,6 +2714,16 @@ struct ONNXWhereOpLowering : public ConversionPattern {
     ONNXBroadcastOpShapeHelper shapeHelper(op, operands, &create.krnlIE);
     shapeHelper.computeShapeAndAssertOnFailure();
     bool hasNoBroadcast = shapeHelper.hasNoBroadcast(dimAnalysis);
+
+    Type outputTensorType = *op->result_type_begin();
+    int64_t outputRankFromShape = shapeHelper.getOutputDims().size();
+    FailureOr<MemRefType> outputMemRefTypeOr = getRankedOutputMemRefType(
+        *typeConverter, outputTensorType, outputRankFromShape);
+    if (failed(outputMemRefTypeOr))
+      return rewriter.notifyMatchFailure(
+          op, "failed to materialize ranked memref output type");
+    MemRefType outputMemRefType = *outputMemRefTypeOr;
+    int64_t outputRank = outputMemRefType.getRank();
 
     // Insert an allocation and deallocation for the result of this operation.
     Value alloc =

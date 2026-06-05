@@ -46,6 +46,8 @@ cmake -G Ninja .. -DMLIR_DIR=/home/lai/mlir_toy/llvm-project/build/lib/cmake/mli
 
 ninja onnx-mlir-opt
 
+cmake --build /home/lai/onnx_mlir/onnx-mlir/build --target onnx-mlir-opt -- -j4
+cmake --build /home/lai/onnx_mlir/onnx-mlir/build --target onnx-mlir-opt onnx-mlir -- -j4
 
 //build model to onnx
 ./onnx-mlir --EmitONNXIR mnist-12.onnx(檔名) 
@@ -59,47 +61,8 @@ ninja onnx-mlir-opt
 
 //一次生成11.so
 bash scripts/build_mobilenet11_sos.sh 可加生成檔案位置
-./build_mobilenet11_sos.sh ./temp/mobilenet11_temp
-# 一次跑完整 11 模型 pairwise 
-bash scripts/compare_model11_dataset.sh \
-  --model-name mobilenetv2-12 \
-  --out-dir /tmp/mobilenet11 \
-  --txt-dir datasets/vision/processed/imagenette_val_224 \
-  --shape 1,3,224,224 --limit 100 --warmup 2 --iters 5 --progress 2
+./bash/build_mobilenet11_sos.sh ./temp/mobilenet11_temp
 
-# 單so測試
-bash ./time_model_single_format.sh \  
-    --model-name mobilenetv2-12   \
-    --format p8e0   \
-    --out-dir ./temp/mobilenet11   \
-    --txt-dir ./temp/imagenette_val_224   \
-    --shape 1x3x224x224   --limit 100   \
-    --label-map ./temp/imagenette_val_224_labels.txt   \
-    --baseline none   --no-benchmark   --progress 1   \
-    --log-file ./temp/mobilenet11/p8e0_limit100_label_nobase.log
-
-# resnet
-bash ./time_model_single_format.sh   \
-    --model-name resnet50-v1-12   \
-    --format p8e0   \
-    --out-dir ./temp/resnet50-11_temp   \
-    --txt-dir ./temp/imagenette_val_224   \
-    --shape 1x3x224x224   --limit 1000   \
-    --label-map ./temp/imagenette_val_224_labels.txt   \
-    --baseline none   --no-benchmark   --progress 1   \
-    --log-file ./temp/resnet50-11_temp/p8e0_limit100_label_nobase.log
-
-# 全so 平行多核
-bash/time_mobilenet11_dataset_parallel.sh \
-  --out-dir ./temp/mobilenet11_temp \
-  --txt-dir ./temp/imagenette_val_224 \
-  --label-map ./temp/imagenette_val_224_labels.txt \
-  --jobs 4 \
-  --limit 100 \
-  --warmup 0 \
-  --iters 1 \
-  --no-benchmark \
-  --progress 10
 
 bash/time_resnet50_11_dataset_parallel.sh \
   --out-dir ./temp/resnet50-11_temp \
@@ -111,3 +74,335 @@ bash/time_resnet50_11_dataset_parallel.sh \
   --iters 1 \
   --no-benchmark \
   --progress 1
+
+最新版build 依照這板  可最低
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_MIN=0.0078125 ONNX_MLIR_POSIT_CONST_ALPS_THETA_MAX=16 ONNX_MLIR_POSIT_CONST_ALPS_THETA_STEPS=25 ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_TARGET=1.0 ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_PERCENTILE=0.95 POSIT_GP_RS_VALUES_P8=7,6,5 POSIT_GP_SC_VALUES_P8=0,-3
+bash /home/lai/onnx_mlir/onnx-mlir/src/bash/build_mobilenet11_sos.sh \
+  /tmp/mobilenet11_singlefmt \
+  --posit-source nqdq \
+  --posit-formats p8e0 \
+  --runtime-format-scope single \
+  --runtime-qalign-mode alps-only \
+  --runtime-mixed-accum off 
+
+RESNET50
+ONNX_MLIR_POSIT_CONST_ALPS=1 \
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_MIN=0.0078125 \
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_MAX=16 \
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_STEPS=25 \
+ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_TARGET=1.0 \
+ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_PERCENTILE=0.95 \
+POSIT_GP_EXPERIMENTAL_FORMATS=p8e0,p8e1,p8e2 \
+POSIT_GP_RS_VALUES_P8=7,6,5 \
+POSIT_GP_SC_VALUES_P8=0,-3 \
+POSIT_RUNTIME_CPP_PATH=/home/lai/onnx_mlir/onnx-mlir/src/posit_runtime.cpp \
+RUN_TIME_CPP_PATH=/home/lai/onnx_mlir/onnx-mlir/src/run_time.cpp \
+bash /home/lai/onnx_mlir/ImageNet100/build_imagenet100_11_sos.sh \
+  /home/lai/onnx_mlir/ImageNet100/build_posit11_nqdq_gp_alps \
+  --posit-source nqdq \
+  --posit-formats p8e0,p8e1,p8e2,p16e0,p16e1,p16e2,p32e0,p32e1,p32e2 \
+  --runtime-format-scope single \
+  --runtime-qalign-mode alps-only \
+  --runtime-mixed-accum off
+
+10跟100的資料夾： 
+10：
+--txt-dir ./temp/imagenette_val_224
+--label-map ./temp/imagenette_val_224_labels.txt 
+100：
+--txt-dir /home/lai/onnx_mlir/ImageNet100/val_224_txt
+--label-map /home/lai/onnx_mlir/ImageNet100/val_224_labels_imagenet1k.txt
+
+mobilenetv2最終版build (nqdq)  要記得改輸出資料夾 runtime也要用同樣的  正常格式p8/p16/p32 （es=0,1,2）用法
+POSIT_CONST_ALPS_JOBS=25 \
+POSIT_CONST_DEBUG=1 \
+ONNX_MLIR_POSIT_CONST_ALPS=1 \
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_MIN=0.0078125 \
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_MAX=16 \
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_STEPS=25 \
+ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_TARGET=1.0 \
+ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_PERCENTILE=0.95 \
+ONNX_MLIR_POSIT_CONST_ALPS_MIN_GAIN=0.001 \
+ONNX_MLIR_POSIT_CONST_ALPS_MAX_SAMPLES=0 \
+POSIT_GP_EXPERIMENTAL_FORMATS=p8e0,p8e1,p8e2 \
+POSIT_GP_RS_VALUES_P8=7,6,5 \
+POSIT_GP_SC_VALUES_P8=3,-3 \
+POSIT_FORMATS=p8e0,p8e1,p8e2 \
+bash /home/lai/onnx_mlir/ImageNet100/build_imagenet100_mobilenetv2_11_sos.sh \
+  /home/lai/onnx_mlir/ImageNet100/build_posit11_mobilenetv2_alps \
+  --posit-source nqdq \
+  --runtime-format-scope single \
+  --runtime-qalign-mode alps-only \
+  --runtime-mixed-accum off \
+  --runtime-output-alps offline
+
+0525:
+POSIT_FORMATS=p8e0,p8e1,p8e2 \
+INCLUDE_F32_BASELINES=1 \
+POSIT_CONST_ALPS_JOBS=25 \
+POSIT_CONST_DEBUG=1 \
+ONNX_MLIR_POSIT_CONST_ALPS=1 \
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_MIN=0.0078125 \
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_MAX=2048 \
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_STEPS=300 \
+ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_TARGET=1.0 \
+ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_PERCENTILE=0.95 \
+ONNX_MLIR_POSIT_CONST_ALPS_MIN_GAIN=0.001 \
+ONNX_MLIR_POSIT_CONST_ALPS_MAX_SAMPLES=0 \
+POSIT_GP_EXPERIMENTAL_FORMATS=p8e0,p8e1,p8e2 \
+POSIT_GP_RS_VALUES_P8=7,6,5,4 \
+POSIT_GP_SC_VALUES_P8=5,3,1,0,-1,-3,-5 \
+bash /home/lai/onnx_mlir/ImageNet100/build_imagenet100_mobilenetv2_11_sos.sh \
+  /home/lai/onnx_mlir/ImageNet100/build_posit11_mobilenetv2_alps_v2 \
+  --posit-source nqdq \
+  --runtime-format-scope single \
+  --runtime-qalign-mode alps-only \
+  --runtime-mixed-accum off \
+  --runtime-output-alps offline
+
+
+
+mobilenetv2最終版runtime  (nqdq)  要記得改要測的資料夾
+
+env \
+  -u POSIT_MIXED_PRECISION_P16 \
+  -u POSIT_MIXED_PRECISION_P16_OPS \
+  -u POSIT_MIXED_PRECISION_P32 \
+  -u POSIT_MIXED_PRECISION_P32_OPS \
+  -u POSIT_QOP_F32_MATH \
+  -u POSIT_QOP_F32_MATH_OPS \
+  -u POSIT_DOT_F32_MATH \
+  -u POSIT_DOT_F32_MATH_OPS \
+  -u POSIT_DOT_MIXED_P16 \
+  -u POSIT_DOT_MIXED_P16_OPS \
+  -u POSIT_QUIRE_P8 \
+  
+
+env -u POSIT_MIXED_PRECISION_P16     -u POSIT_MIXED_PRECISION_P16_OPS     -u POSIT_MIXED_PRECISION_P32     -u POSIT_MIXED_PRECISION_P32_OPS     -u POSIT_QOP_F32_MATH     -u POSIT_QOP_F32_MATH_OPS     -u POSIT_DOT_F32_MATH     -u POSIT_DOT_F32_MATH_OPS     -u POSIT_DOT_MIXED_P16     -u POSIT_DOT_MIXED_P16_OPS     -u POSIT_QUIRE_P8  POSIT_RUNTIME_OUTPUT_ALPS_DEBUG=1 POSIT_RUNTIME_OUTPUT_ALPS_DEBUG_LIMIT=64   bash ./bash/time_mobilenet11_dataset_parallel.sh   --out-dir ./temp/mobilenet11_alps_strict   --txt-dir /home/lai/onnx_mlir/ImageNet100/val_224_txt   --label-map /home/lai/onnx_mlir/ImageNet100/val_224_labels_imagenet1k.txt   --suffixes qdq-f32,nqdq-f32,nqdq-p8e0,nqdq-p8e1,nqdq-p8e2   --qalign-auto off   --qalign-mode off   --jobs 25   --limit 5000   --warmup 0   --iters 1   --no-benchmark   --quire off   --progress 1   --task-progress on 2>&1 | tee ./temp/mobilenet11_alps_offline_0511/mobilenet11_runtime_output_alps_debug.log 
+// test big range
+POSIT_CONST_ALPS_JOBS=25 POSIT_CONST_DEBUG=1 ONNX_MLIR_POSIT_CONST_ALPS=1 ONNX_MLIR_POSIT_CONST_ALPS_THETA_MIN=0.0009765625 ONNX_MLIR_POSIT_CONST_ALPS_THETA_MAX=1024 ONNX_MLIR_POSIT_CONST_ALPS_THETA_STEPS=769 ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_TARGET=1.0 ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_PERCENTILE=0.95 ONNX_MLIR_POSIT_CONST_ALPS_MIN_GAIN=0.005 ONNX_MLIR_POSIT_CONST_ALPS_MAX_SAMPLES=0 POSIT_GP_EXPERIMENTAL_FORMATS=p8e0,p8e1,p8e2 POSIT_GP_RS_VALUES_P8=7,6,5,4,3 POSIT_GP_SC_VALUES_P8=5,-5 bash /home/lai/onnx_mlir/onnx-mlir/src/bash/build_mobilenet11_sos.sh   ./temp/mobilenet11_alps_offline_ir   --posit-source nqdq   --posit-formats p8e0,p8e1,p8e2   --runtime-format-scope single   --runtime-qalign-mode alps-only   --runtime-mixed-accum off   --runtime-output-alps offline
+
+0525：
+bash /home/lai/onnx_mlir/onnx-mlir/src/bash/time_model11_dataset_parallel.sh \
+  --model-name imagenet100_mobilenetv2 \
+  --out-dir /home/lai/onnx_mlir/ImageNet100/build_posit11_mobilenetv2_alps_v2 \
+  --image-dir /home/lai/onnx_mlir/ImageNet100/imagenet100_hf/validation \
+  --image-preprocess-script /home/lai/onnx_mlir/ImageNet100/preprocess_imagenet100_tensor.py \
+  --shape 1x3x224x224 \
+  --suffixes nqdq-f32,qdq-f32,nqdq-p8e0,nqdq-p8e1,nqdq-p8e2 \
+  --baseline none \
+  --qalign-auto off \
+  --qalign-mode off \
+  --jobs 25 \
+  --limit 5000 \
+  --warmup 0 \
+  --iters 1 \
+  --no-benchmark \
+  --quire off \
+  --task-progress on \
+  --progress 10 \
+  --output-alps-auto on     \
+  --output-alps-formats p8e2     \
+  --output-alps-collect-limit 500     \
+  --output-alps-collect-jobs 25     \
+  --record-preds on  \
+  2>&1 | tee /home/lai/onnx_mlir/ImageNet100/build_posit11_resnet18_alps_check_0521/resnet18_nqdq_p8e2_output_alps_5000.log
+
+mobilenetv2 extra (qdq) (p4e2~p8e2) build 
+
+方法A ： INT8 → posit bits 存儲
+POSIT_FORMATS=p4e0,p4e1,p4e2,p5e0,p5e1,p5e2,p6e0,p6e1,p6e2,p7e0,p7e1,p7e2,p8e0,p8e1,p8e2 \
+INCLUDE_F32_BASELINES=1 \
+POSIT_STORE_DQ_AS_POSIT=1 \
+bash /home/lai/onnx_mlir/ImageNet100/build_imagenet100_mobilenetv2_11_sos.sh \
+  /home/lai/onnx_mlir/ImageNet100/build_posit11_mobilenetv2_qdq_p4top8_storedq \
+  --posit-source qdq \
+  --runtime-format-scope single \
+  --runtime-qalign-mode full \
+  --runtime-mixed-accum off \
+  --runtime-output-alps off
+
+方法B ： 直接 posit，不經 INT8
+POSIT_FORMATS=p4e0,p4e1,p4e2,p5e0,p5e1,p5e2,p6e0,p6e1,p6e2,p7e0,p7e1,p7e2,p8e0,p8e1,p8e2 \
+INCLUDE_F32_BASELINES=1 \
+POSIT_PREFER_DIRECT_FROM_QDQ=1 \
+bash /home/lai/onnx_mlir/ImageNet100/build_imagenet100_mobilenetv2_11_sos.sh \
+  /home/lai/onnx_mlir/ImageNet100/build_posit11_mobilenetv2_qdq_p4top8_directposit \
+  --posit-source qdq \
+  --runtime-format-scope single \
+  --runtime-qalign-mode full \
+  --runtime-mixed-accum off \
+  --runtime-output-alps off
+
+解釋：
+POSIT_FORMATS=p4e0,p4e1,p4e2,p5e0,p5e1,p5e2,p6e0,p6e1,p6e2,p7e0,p7e1,p7e2,p8e0,p8e1,p8e2 \
+INCLUDE_F32_BASELINES=1 \
+POSIT_PREFER_DIRECT_FROM_QDQ=1 \  控制直接f32 to posit
+POSIT_STORE_DQ_AS_POSIT=1 \  控制int8轉posit真的有拿來儲存 而非直接轉回f32存
+bash /home/lai/onnx_mlir/onnx-mlir/src/bash/build_mobilenet_extra_sos.sh \
+  ./temp/mobilenet_extra_qdq_0512 \
+  --posit-source qdq \ 從 QDQ 模型出發
+  --align-to-int8-qdomain \ 盡量保留對 int8 DQ 域的對齊 
+  --strict-qdq-mode \  優先走 strict QDQ lowering
+  --runtime-format-scope single \
+  --runtime-qalign-mode alps-only \
+  --runtime-mixed-accum off \  不要混進 p16/p32 promoted mixed path
+  --runtime-output-alps off   不要混進 output ALPS
+
+mobilenetv2 extra (qdq) (p4e2~p8e2) runtime 
+
+POSIT_QOP_F32_MATH=on \
+POSIT_QALIGN_ALPS_TARGET=int8_dq \
+bash /home/lai/onnx_mlir/onnx-mlir/src/bash/time_model11_dataset_parallel.sh \
+  --model-name imagenet100_mobilenetv2 \
+  --out-dir /home/lai/onnx_mlir/ImageNet100/build_posit11_mobilenetv2_qdq_p4top8_storedq \
+  --image-dir /home/lai/onnx_mlir/ImageNet100/imagenet100_hf/validation \
+  --image-preprocess-script /home/lai/onnx_mlir/ImageNet100/preprocess_imagenet100_tensor.py \
+  --shape 1x3x224x224 \
+  --suffixes qdq-f32,qdq-p4e0,qdq-p4e1,qdq-p4e2,qdq-p5e0,qdq-p5e1,qdq-p5e2,qdq-p6e0,qdq-p6e1,qdq-p6e2,qdq-p7e0,qdq-p7e1,qdq-p7e2,qdq-p8e0,qdq-p8e1,qdq-p8e2 \
+  --baseline none \
+  --qalign-auto off --qalign-mode off \
+  --jobs 25 --limit 5000 \
+  --warmup 0 --iters 1 --no-benchmark --quire off \
+  --progress 100 --task-progress on \
+  --output-alps-auto off \
+  --record-preds on
+
+記得換資料夾！！！
+  
+// 
+  POSIT_QOP_F32_MATH=on \
+  POSIT_QOP_F32_MATH_OPS=conv2d,gemm 這兩行決定了運算用f32 重要
+
+resnet18 build 0518
+POSIT_CONST_ALPS_JOBS=25 \
+POSIT_CONST_DEBUG=1 \
+ONNX_MLIR_POSIT_CONST_ALPS=1 \
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_MIN=0.0078125 \
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_MAX=16 \
+ONNX_MLIR_POSIT_CONST_ALPS_THETA_STEPS=25 \
+ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_TARGET=1.0 \
+ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_PERCENTILE=0.95 \
+ONNX_MLIR_POSIT_CONST_ALPS_MIN_GAIN=0.001 \
+ONNX_MLIR_POSIT_CONST_ALPS_MAX_SAMPLES=0 \
+POSIT_GP_EXPERIMENTAL_FORMATS=p8e0,p8e1,p8e2 \
+POSIT_GP_RS_VALUES_P8=7,6,5 \
+POSIT_GP_SC_VALUES_P8=5,3,1,0,-1,-3 \
+bash /home/lai/onnx_mlir/onnx-mlir/src/bash/build_model11_sos.sh \
+  --model-name imagenet100_resnet18 \
+  --qdq-onnx /home/lai/onnx_mlir/ImageNet100/model/imagenet100_resnet18-int8-qdq.onnx \
+  --nqdq-onnx /home/lai/onnx_mlir/ImageNet100/model/imagenet100_resnet18.onnx \
+  --out-dir /home/lai/onnx_mlir/ImageNet100/build_posit11_resnet18_alps \
+  --posit-source nqdq \
+  --posit-formats p8e0,p8e1,p8e2 \
+  --runtime-format-scope single \
+  --runtime-qalign-mode alps-only \
+  --runtime-mixed-accum off \
+  --runtime-output-alps offline
+
+0525：
+POSIT_CONST_ALPS_JOBS=25 POSIT_CONST_DEBUG=1 ONNX_MLIR_POSIT_CONST_ALPS=1 ONNX_MLIR_POSIT_CONST_ALPS_THETA_MIN=0.0078125 ONNX_MLIR_POSIT_CONST_ALPS_THETA_MAX=16 ONNX_MLIR_POSIT_CONST_ALPS_THETA_STEPS=25 ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_TARGET=1.0 ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_PERCENTILE=0.95 ONNX_MLIR_POSIT_CONST_ALPS_MIN_GAIN=0.001 ONNX_MLIR_POSIT_CONST_ALPS_MAX_SAMPLES=0 POSIT_GP_EXPERIMENTAL_FORMATS=p8e0,p8e1,p8e2 POSIT_GP_RS_VALUES_P8=7,6,5 POSIT_GP_SC_VALUES_P8=3,-3 POSIT_FORMATS=p8e0,p8e1,p8e2 bash /home/lai/onnx_mlir/ImageNet100/build_imagenet100_resnet18_11_sos.sh   /home/lai/onnx_mlir/ImageNet100/build_posit11_resnet18_alps_check_0521   --posit-source nqdq   --runtime-format-scope single   --runtime-qalign-mode alps-only   --runtime-mixed-accum off   --runtime-output-alps offline
+
+
+
+resnet18 runtime 0518
+
+bash /home/lai/onnx_mlir/onnx-mlir/src/bash/time_model11_dataset_parallel.sh \
+  --model-name imagenet100_resnet18 \
+  --out-dir /home/lai/onnx_mlir/ImageNet100/build_posit11_resnet18_alps \
+  --txt-dir /home/lai/onnx_mlir/ImageNet100/val_224_txt \
+  --label-map /home/lai/onnx_mlir/ImageNet100/val_224_labels_imagenet1k.txt \
+  --shape 1x3x224x224 \
+  --suffixes qdq-f32,nqdq-f32,nqdq-p8e0,nqdq-p8e1,nqdq-p8e2 \
+  --baseline none \
+  --qalign-auto off \
+  --qalign-mode off \
+  --jobs 25 \
+  --limit 5000 \
+  --warmup 0 \
+  --iters 1 \
+  --no-benchmark \
+  --quire off \
+  --progress 1 \
+  --task-progress on \
+  --output-alps-auto on \
+  --output-alps-formats p8e0,p8e1,p8e2 \
+  --output-alps-collect-limit 100 \
+  --output-alps-collect-jobs 25
+
+0525：
+env   -u POSIT_MIXED_PRECISION_P16   -u POSIT_MIXED_PRECISION_P16_OPS   -u POSIT_MIXED_PRECISION_P32   -u POSIT_MIXED_PRECISION_P32_OPS   -u POSIT_QOP_F32_MATH   -u POSIT_QOP_F32_MATH_OPS   -u POSIT_DOT_F32_MATH   -u POSIT_DOT_F32_MATH_OPS   -u POSIT_DOT_MIXED_P16   -u POSIT_DOT_MIXED_P16_OPS   -u POSIT_QUIRE_P8   bash /home/lai/onnx_mlir/onnx-mlir/src/bash/time_model11_dataset_parallel.sh     --model-name imagenet100_resnet18     --out-dir /home/lai/onnx_mlir/ImageNet100/build_posit11_resnet18_alps_check_0521     --image-dir /home/lai/onnx_mlir/ImageNet100/imagenet100_hf/validation     --image-preprocess-script /home/lai/onnx_mlir/ImageNet100/preprocess_imagenet100_tensor.py     --shape 1x3x224x224     --suffixes qdq-f32,nqdq-f32,nqdq-p8e2     --baseline none     --qalign-auto off     --qalign-mode off     --jobs 25     --limit 5000     --warmup 0     --iters 1     --no-benchmark     --quire off     --progress 10     --task-progress on     --output-alps-auto on     --output-alps-formats p8e2     --output-alps-collect-limit 500     --output-alps-collect-jobs 25     --record-preds on   2>&1 | tee /home/lai/onnx_mlir/ImageNet100/build_posit11_resnet18_alps_check_0521/resnet18_nqdq_p8e2_output_alps_5000.log
+
+env   -u POSIT_MIXED_PRECISION_P16   
+      -u POSIT_MIXED_PRECISION_P16_OPS   
+      -u POSIT_MIXED_PRECISION_P32   
+      -u POSIT_MIXED_PRECISION_P32_OPS   
+      -u POSIT_QOP_F32_MATH   
+      -u POSIT_QOP_F32_MATH_OPS   
+      -u POSIT_DOT_F32_MATH   
+      -u POSIT_DOT_F32_MATH_OPS   
+      -u POSIT_DOT_MIXED_P16   
+      -u POSIT_DOT_MIXED_P16_OPS   
+      -u POSIT_quire_P8   
+      bash /home/lai/onnx_mlir/onnx-mlir/src/bash/time_model11_dataset_parallel.sh     
+      --model-name imagenet100_resnet18     \
+      --out-dir /home/lai/onnx_mlir/ImageNet100/build_posit11_resnet18_alps_check_0521     \
+      --image-dir /home/lai/onnx_mlir/ImageNet100/imagenet100_hf/validation     \
+      --image-preprocess-script /home/lai/onnx_mlir/ImageNet100/preprocess_imagenet100_tensor.py     \
+      --shape 1x3x224x224     \
+      --suffixes qdq-f32,nqdq-f32,nqdq-p8e2     \
+      --baseline none     \
+      --qalign-auto off     \
+      --qalign-mode off     \
+      --jobs 25     \
+      --limit 5000     \
+      --warmup 0     \
+      --iters 1     \
+      --no-benchmark     \
+      --quire off     \
+      --progress 10     \
+      --task-progress on     \
+      --output-alps-auto on     \
+      --output-alps-formats p8e2     \
+      --output-alps-collect-limit 500     \
+      --output-alps-collect-jobs 25     \
+      --record-preds on   2>&1 | tee /home/lai/onnx_mlir/ImageNet100/build_posit11_resnet18_alps_check_0521/resnet18_nqdq_p8e2_output_alps_5000.log
+
+
+
+resnet18 extra (qdq) (p4e0~p7e3) build 0603
+
+POSIT_FORMATS=p4e0,p4e1,p4e2,p5e0,p5e1,p5e2,p6e0,p6e1,p6e2,p7e0,p7e1,p7e2,p8e0,p8e1,p8e2 \
+INCLUDE_F32_BASELINES=1 \
+bash /home/lai/onnx_mlir/ImageNet100/build_imagenet100_resnet18_11_sos.sh \
+  /home/lai/onnx_mlir/ImageNet100/build_posit11_resnet18_qdq_p4top8 \
+  --posit-source qdq \
+  --runtime-format-scope single \
+  --runtime-qalign-mode full \
+  --runtime-mixed-accum off \
+  --runtime-output-alps off
+
+resnet18 extra (qdq) (p4e0~p7e3) runtime 0603
+
+POSIT_QOP_F32_MATH=on \
+POSIT_QALIGN_ALPS_TARGET=int8_dq \
+bash /home/lai/onnx_mlir/onnx-mlir/src/bash/time_model11_dataset_parallel.sh \
+  --model-name imagenet100_resnet18 \
+  --out-dir /home/lai/onnx_mlir/ImageNet100/build_posit11_resnet18_qdq_p4top8 \
+  --image-dir /home/lai/onnx_mlir/ImageNet100/imagenet100_hf/validation \
+  --image-preprocess-script /home/lai/onnx_mlir/ImageNet100/preprocess_imagenet100_tensor.py \
+  --shape 1x3x224x224 \
+  --suffixes qdq-f32,qdq-p4e0,qdq-p4e1,qdq-p4e2,qdq-p5e0,qdq-p5e1,qdq-p5e2,qdq-p6e0,qdq-p6e1,qdq-p6e2,qdq-p7e0,qdq-p7e1,qdq-p7e2,qdq-p8e0,qdq-p8e1,qdq-p8e2 \
+  --baseline none \
+  --qalign-auto off \
+  --qalign-mode off \
+  --jobs 25 \
+  --limit 5000 \
+  --warmup 0 \
+  --iters 1 \
+  --no-benchmark \
+  --quire off \
+  --progress 100 \
+  --task-progress on \
+  --output-alps-auto off \
+  --record-preds on

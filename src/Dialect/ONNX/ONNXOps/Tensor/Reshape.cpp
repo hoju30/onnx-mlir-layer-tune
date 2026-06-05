@@ -31,7 +31,9 @@ LogicalResult ONNXReshapeOpShapeHelper::computeShape() {
 
   // Get info about input data operand.
   Value data = operandAdaptor.getData();
-  int64_t dataRank = mlir::cast<ShapedType>(data.getType()).getShape().size();
+  int64_t dataRank = 0;
+  if (createIE->hasShapeAndRank(data))
+    dataRank = createIE->getShapedTypeRank(data);
 
   // Get info about shape operand.
   Value shape = operandAdaptor.getShape();
@@ -132,13 +134,11 @@ LogicalResult ONNXReshapeOpShapeHelper::computeShape() {
     IndexExpr dimShape = createIE->getIntFromArrayAsSymbol(shape, i);
     if (dimShape.isUndefined())
       return op->emitError("shape input parameter could not be processed");
-    IndexExpr dim;
-    if (i < dataRank)
-      // dimShape == 0: use dim from the input.
-      dim = dimShape.selectOrSelf(
-          dimShape == 0, createIE->getShapeAsDim(data, i));
-    else
-      dim = dimShape;
+    IndexExpr dim = dimShape;
+    if (i < dataRank && dimShape.isLiteral() && dimShape.getLiteral() == 0) {
+      // Literal 0 in the reshape pattern means "copy input dim i".
+      dim = createIE->getShapeAsDim(data, i);
+    }
 
     // Just store the dim as it is. Real value for -1 will be computed later.
     outputDims[i] = dim;
@@ -148,7 +148,8 @@ LogicalResult ONNXReshapeOpShapeHelper::computeShape() {
     if (auto search = outputIgnoredDims.find(i);
         search != outputIgnoredDims.end())
       continue;
-    dim = dim.selectOrSelf(dim == -1, LitIE(1));
+    if (dim.isLiteral() && dim.getLiteral() == -1)
+      dim = LitIE(1);
     numOfElementsFromShape = numOfElementsFromShape * dim;
   }
 
@@ -159,16 +160,15 @@ LogicalResult ONNXReshapeOpShapeHelper::computeShape() {
   for (unsigned i = 0; i < outputRank; ++i) {
     if (hasShapeAndRank(data)) {
       IndexExpr dimShape = createIE->getIntFromArrayAsSymbol(shape, i);
-      outputDims[i] = outputDims[i].selectOrSelf(
-          dimShape == -1, numOfElements.floorDiv(numOfElementsFromShape));
+      if (dimShape.isLiteral() && dimShape.getLiteral() == -1)
+        outputDims[i] = numOfElements.floorDiv(numOfElementsFromShape);
     } else {
       // ToFix: can not check getAllowzero because the operandAdaptor is
       // constructed without attributes
       // Anyway the question mark is a conservative but correct result.
-      outputDims[i] = outputDims[i].selectOrSelf(
-          outputDims[i] == 0, QuestionmarkIndexExpr(false));
-      outputDims[i] = outputDims[i].selectOrSelf(
-          outputDims[i] == -1, QuestionmarkIndexExpr(false));
+      if (outputDims[i].isLiteral() &&
+          (outputDims[i].getLiteral() == 0 || outputDims[i].getLiteral() == -1))
+        outputDims[i] = QuestionmarkIndexExpr(false);
     }
   }
 

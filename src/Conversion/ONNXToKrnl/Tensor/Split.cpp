@@ -117,6 +117,18 @@ struct ONNXSplitV11OpLowering : public OpConversionPattern<ONNXSplitV11Op> {
   }
 };
 
+struct ONNXSplitV13OpLowering : public OpConversionPattern<ONNXSplitV13Op> {
+  ONNXSplitV13OpLowering(TypeConverter &typeConverter, MLIRContext *ctx)
+      : OpConversionPattern(typeConverter, ctx) {}
+
+  LogicalResult matchAndRewrite(ONNXSplitV13Op splitOp,
+      ONNXSplitV13OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const final {
+    return ONNXSplitOpLoweringCommon<ONNXSplitV13Op, ONNXSplitV13OpAdaptor>(
+        splitOp, adaptor, rewriter, typeConverter);
+  }
+};
+
 void populateLoweringONNXSplitOpPattern(RewritePatternSet &patterns,
     TypeConverter &typeConverter, MLIRContext *ctx) {
   patterns.insert<ONNXSplitOpLowering>(typeConverter, ctx);
@@ -125,6 +137,11 @@ void populateLoweringONNXSplitOpPattern(RewritePatternSet &patterns,
 void populateLoweringONNXSplitV11OpPattern(RewritePatternSet &patterns,
     TypeConverter &typeConverter, MLIRContext *ctx) {
   patterns.insert<ONNXSplitV11OpLowering>(typeConverter, ctx);
+}
+
+void populateLoweringONNXSplitV13OpPattern(RewritePatternSet &patterns,
+    TypeConverter &typeConverter, MLIRContext *ctx) {
+  patterns.insert<ONNXSplitV13OpLowering>(typeConverter, ctx);
 }
 
 } // namespace onnx_mlir

@@ -6,6 +6,7 @@ if [[ -z "$pythonLocation" ]]; then
         -DCMAKE_CXX_COMPILER=/usr/bin/c++ \
         -DCMAKE_BUILD_TYPE=Release \
         -DLLVM_ENABLE_ASSERTIONS=ON \
+        -DONNX_USE_PROTOBUF_SHARED_LIBS=ON \
         -DMLIR_DIR=${MLIR_DIR} \
         ..
 else
@@ -14,6 +15,7 @@ else
         -DCMAKE_BUILD_TYPE=Release \
         -DLLVM_ENABLE_ASSERTIONS=ON \
         -DPython3_ROOT_DIR=$pythonLocation \
+        -DONNX_USE_PROTOBUF_SHARED_LIBS=ON \
         -DMLIR_DIR=${MLIR_DIR} \
         ..
 fi

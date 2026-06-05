@@ -401,6 +401,8 @@ void populateLoweringONNXPoolingOpPattern(
 // `ObjectDetection` directory methods:
 void populateLoweringONNXNonMaxSuppressionOpPattern(
     mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
+void populateLoweringONNXRoiAlignOpPattern(
+    mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
 
 // `Quantization` directory methods:
 void populateLoweringONNXDynamicQuantizeLinearOpPattern(
@@ -484,6 +486,8 @@ void populateLoweringONNXSqueezeV11OpPattern(
 void populateLoweringONNXSplitOpPattern(
     mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
 void populateLoweringONNXSplitV11OpPattern(
+    mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
+void populateLoweringONNXSplitV13OpPattern(
     mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
 void populateLoweringONNXSizeOpPattern(
     mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);

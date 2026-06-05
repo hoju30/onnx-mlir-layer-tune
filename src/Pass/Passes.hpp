@@ -92,7 +92,9 @@ std::unique_ptr<mlir::Pass> createONNXPreKrnlVerifyPass();
 // add lowering posit pass 11/27
 std::unique_ptr<mlir::Pass> createConvertONNXToPositPass();
 std::unique_ptr<mlir::Pass> createConvertONNXToPositPass(unsigned nbits,
-                                                         unsigned es);
+                                                         unsigned es,
+                                                         bool alignToInt8QDomain,
+                                                         bool preferDirectF32FromQDQ);
 
 // add lowering posit to krnl pass 12/17
 std::unique_ptr<mlir::Pass> createConvertPositToKrnlPass();

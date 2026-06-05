@@ -1575,7 +1575,9 @@ Value MemRefBuilder::reshapeToFlatInnermost(Value valToReshape,
   for (int64_t d = axis; d < inputRank; ++d)
     numOfFlattenedElements = numOfFlattenedElements * dims[d];
   flattenedDims.emplace_back(numOfFlattenedElements);
-  // Reshape.
+  // Keep the original reshape-based flattening here; collapse_shape can
+  // introduce affine.delinearize_index ops that are not always legalized in
+  // the current qdq-f32 pipeline.
   return reshape(flattenedDims, valToReshape);
 }
 
@@ -1608,7 +1610,9 @@ Value MemRefBuilder::reshapeToFlat2D(Value valToReshape, DimsExprRef dims,
   for (int64_t d = axis; d < inputRank; ++d)
     numElement2ndDim = numElement2ndDim * dims[d];
   flattenedDims.emplace_back(numElement2ndDim);
-  // Reshape.
+  // Keep the original reshape-based flattening here; collapse_shape can
+  // introduce affine.delinearize_index ops that are not always legalized in
+  // the current qdq-f32 pipeline.
   return reshape(flattenedDims, valToReshape);
 }
 
@@ -1646,9 +1650,15 @@ Value MemRefBuilder::reinterpretCast(
   // Compute output type
   SmallVector<int64_t, 4> outputShape;
   SmallVector<OpFoldResult, 4> sizes, strides;
-  IndexExpr::getShape(outputDims, outputShape);
   IndexExpr::getOpOrFoldResults(sizesIE, sizes);
   IndexExpr::getOpOrFoldResults(stridesIE, strides);
+  outputShape.resize(rank, ShapedType::kDynamic);
+  for (int64_t i = 0; i < rank; ++i) {
+    if (auto sizeAttr = llvm::dyn_cast<Attribute>(sizes[i])) {
+      if (auto intAttr = mlir::dyn_cast<IntegerAttr>(sizeAttr))
+        outputShape[i] = intAttr.getInt();
+    }
+  }
   Type elementType = mlir::cast<ShapedType>(input.getType()).getElementType();
   MemRefType outputMemRefType = MemRefType::get(outputShape, elementType);
   if (offset)

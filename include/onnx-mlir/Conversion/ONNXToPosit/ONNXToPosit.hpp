@@ -11,7 +11,8 @@ class TypeConverter;
 namespace onnx_mlir {
 /// 建立 pass 
 std::unique_ptr<mlir::Pass> createConvertONNXToPositPass(
-    unsigned positES, unsigned positFS);
+    unsigned nbits, unsigned es, bool alignToInt8QDomain,
+    bool preferDirectF32FromQDQ);
 
 /// 供外部測試或其他 pass 呼叫時，把轉換規則注入到 patterns。
 void populateONNXToPositPatterns(mlir::RewritePatternSet &patterns,

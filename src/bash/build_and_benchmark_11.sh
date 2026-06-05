@@ -9,7 +9,9 @@ Usage:
     [--nqdq-mlir PATH | --nqdq-onnx PATH] \
     [--shape-info STR] [--out-dir PATH] \
     [--input-shape NxCxHxW] [--input-txt PATH | --zeros | --random [seed]] \
-    [--warmup N] [--iters N] [--label CLASS] [--timeout-sec N] [--continue-on-posit-fail]
+    [--warmup N] [--iters N] [--label CLASS] [--timeout-sec N] [--continue-on-posit-fail] \
+    [--strict-qdq-mode] [--non-strict-qdq-mode] \
+    [--align-to-int8-qdomain] [--no-align-to-int8-qdomain]
 
 Output:
   1) Build 11 shared libraries via build_model11_sos.sh
@@ -83,8 +85,12 @@ while [[ $# -gt 0 ]]; do
       timeout_sec="$2"; shift 2;;
     --continue-on-posit-fail)
       continue_on_posit_fail=1; shift;;
-    --universal-include-dir|--cruntime-lib-dir|--onnx-mlir|--onnx-mlir-opt|--mlir-translate|--use-onnx-ir)
+    --universal-include-dir|--cruntime-lib-dir|--onnx-mlir|--onnx-mlir-opt|--mlir-translate|--use-onnx-ir|--align-to-int8-qdomain|--no-align-to-int8-qdomain|--strict-qdq-mode|--non-strict-qdq-mode)
       if [[ "$1" == "--use-onnx-ir" ]]; then
+        extra_build_args+=("$1")
+        shift
+      elif [[ "$1" == "--align-to-int8-qdomain" || "$1" == "--no-align-to-int8-qdomain" ||
+              "$1" == "--strict-qdq-mode" || "$1" == "--non-strict-qdq-mode" ]]; then
         extra_build_args+=("$1")
         shift
       else

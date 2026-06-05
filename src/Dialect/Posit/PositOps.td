@@ -94,10 +94,19 @@ def Posit_ToF32Op : Posit_Op<"to_f32", [Pure]> {
 }
 
 def Posit_DequantizeLinearOp : Posit_Op<"dequantize_linear", [Pure]> {
-  let summary = "dequantize integer tensor to posit tensor";
-  let arguments = (ins AnyTensor:$input);
+  let summary = "dequantize integer tensor to posit tensor, with optional f32 reference";
+  let description = [{
+    Dequantize an integer QDQ tensor into posit storage or f32 output.
+    The optional `orig_ref` operand is the pre-QuantizeLinear f32 tensor used
+    only for qalign/full-reference collection and probing. It lets runtime collect
+    paired samples under the same qalign key:
+      orig_samples = orig_ref
+      dq_samples   = (q - zero_point) * scale
+  }];
+  let arguments = (ins AnyTensor:$input, Variadic<AnyTensor>:$orig_ref);
   let results   = (outs AnyTensor:$result);
-  let assemblyFormat = "$input attr-dict `:` type($input) `->` type($result)";
+  // Use generic assembly so older one-operand IR and newer two-operand IR both
+  // parse without a fragile optional custom format.
   let hasFolder = 0;
 }
 

@@ -231,6 +231,7 @@ void populateONNXToKrnlConversionPattern(RewritePatternSet &patterns,
   populateLoweringONNXCategoryMapperOpPattern(patterns, typeConverter, ctx);
   // ObjectDetection
   populateLoweringONNXNonMaxSuppressionOpPattern(patterns, typeConverter, ctx);
+  populateLoweringONNXRoiAlignOpPattern(patterns, typeConverter, ctx);
   // Quantization
   populateLoweringONNXDynamicQuantizeLinearOpPattern(patterns, typeConverter, ctx, enableSIMD, enableParallel, enableFastMath);
   populateLoweringONNXQuantizeLinearOpPattern(patterns, typeConverter, ctx, enableSIMD, enableParallel, enableFastMath);
@@ -260,6 +261,7 @@ void populateONNXToKrnlConversionPattern(RewritePatternSet &patterns,
   populateLoweringONNXSqueezeV11OpPattern(patterns, typeConverter, ctx);
   populateLoweringONNXSplitOpPattern(patterns, typeConverter, ctx);
   populateLoweringONNXSplitV11OpPattern(patterns, typeConverter, ctx);
+  populateLoweringONNXSplitV13OpPattern(patterns, typeConverter, ctx);
   populateLoweringONNXSizeOpPattern(patterns, typeConverter, ctx);
   populateLoweringONNXTileOpPattern(patterns, typeConverter, ctx);
   populateLoweringONNXFlattenOpPattern(patterns, typeConverter, ctx);
