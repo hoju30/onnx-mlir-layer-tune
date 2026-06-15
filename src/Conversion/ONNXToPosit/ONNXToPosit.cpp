@@ -415,41 +415,54 @@ struct ConvertONNXToPositPass
       return false;
     };
 
+    // Only FLOAT-typed ops should be lowered to posit. Integer ops (i64 shape /
+    // index arithmetic in dynamic-shape models like GPT-2: Add/Sub/Mul/Reshape on
+    // tensor<i64>) must stay as ONNX -> Krnl integer ops; converting them to posit
+    // produces invalid memref<i64> -> posit-i8 casts. Returns true iff some result
+    // is a float-element shaped type.
+    auto opIsFloatTyped = [&](Operation *op) -> bool {
+      for (Type t : op->getResultTypes())
+        if (auto st = llvm::dyn_cast<ShapedType>(t))
+          if (llvm::isa<FloatType>(st.getElementType()))
+            return true;
+      return false;
+    };
+
     target.addDynamicallyLegalOp<ONNXAddOp>(
-        [&](ONNXAddOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXAddOp op) { return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation())); });
     target.addDynamicallyLegalOp<ONNXSubOp>(
-        [&](ONNXSubOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXSubOp op) { return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation())); });
     target.addDynamicallyLegalOp<ONNXMulOp>(
-        [&](ONNXMulOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXMulOp op) { return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation())); });
     target.addDynamicallyLegalOp<ONNXDivOp>(
-        [&](ONNXDivOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXDivOp op) { return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation())); });
     target.addDynamicallyLegalOp<ONNXReshapeOp>([&](ONNXReshapeOp op) {
-      return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation());
+      return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation()));
     });
     target.addDynamicallyLegalOp<ONNXUnsqueezeOp>([&](ONNXUnsqueezeOp op) {
-      return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation());
+      return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation()));
     });
     target.addDynamicallyLegalOp<ONNXReluOp>(
-        [&](ONNXReluOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXReluOp op) { return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation())); });
     target.addDynamicallyLegalOp<ONNXClipOp>(
-        [&](ONNXClipOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXClipOp op) { return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation())); });
     target.addDynamicallyLegalOp<ONNXMaxPoolSingleOutOp>(
         [&](ONNXMaxPoolSingleOutOp op) {
-          return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation());
+          return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation()));
         });
     target.addDynamicallyLegalOp<ONNXFlattenOp>([&](ONNXFlattenOp op) {
-      return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation());
+      return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation()));
     });
     target.addDynamicallyLegalOp<ONNXConvOp>(
-        [&](ONNXConvOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXConvOp op) { return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation())); });
     target.addDynamicallyLegalOp<ONNXMatMulOp>([&](ONNXMatMulOp op) {
-      return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation());
+      return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation()));
     });
     target.addDynamicallyLegalOp<ONNXGemmOp>(
-        [&](ONNXGemmOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXGemmOp op) { return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation())); });
     target.addDynamicallyLegalOp<ONNXReduceMeanV13Op>(
         [&](ONNXReduceMeanV13Op op) {
-          return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation());
+          return ((!forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation())) || !opIsFloatTyped(op.getOperation()));
         });
 
     target.markUnknownOpDynamicallyLegal(
