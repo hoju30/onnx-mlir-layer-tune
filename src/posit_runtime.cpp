@@ -2491,6 +2491,8 @@ struct UniversalFmt {
   using MemT = MemT_;
   using UIntT = UIntT_;
   using PositT = sw::universal::posit<NBits, ES>;
+  static constexpr int nbits = NBits;  // exposed for format-generic gates (e.g. ALPS)
+  static constexpr int es = ES;
 
   static PositT fromRaw(UIntT b) {
     PositT p;
@@ -2573,6 +2575,24 @@ using FmtP9E0 = UniversalFmt<9, 0, int16_t, uint16_t>;
 using FmtP9E1 = UniversalFmt<9, 1, int16_t, uint16_t>;
 using FmtP9E2 = UniversalFmt<9, 2, int16_t, uint16_t>;
 using FmtP9E3 = UniversalFmt<9, 3, int16_t, uint16_t>;
+using FmtP10E0 = UniversalFmt<10, 0, int16_t, uint16_t>;
+using FmtP10E1 = UniversalFmt<10, 1, int16_t, uint16_t>;
+using FmtP10E2 = UniversalFmt<10, 2, int16_t, uint16_t>;
+using FmtP11E0 = UniversalFmt<11, 0, int16_t, uint16_t>;
+using FmtP11E1 = UniversalFmt<11, 1, int16_t, uint16_t>;
+using FmtP11E2 = UniversalFmt<11, 2, int16_t, uint16_t>;
+using FmtP12E0 = UniversalFmt<12, 0, int16_t, uint16_t>;
+using FmtP12E1 = UniversalFmt<12, 1, int16_t, uint16_t>;
+using FmtP12E2 = UniversalFmt<12, 2, int16_t, uint16_t>;
+using FmtP13E0 = UniversalFmt<13, 0, int16_t, uint16_t>;
+using FmtP13E1 = UniversalFmt<13, 1, int16_t, uint16_t>;
+using FmtP13E2 = UniversalFmt<13, 2, int16_t, uint16_t>;
+using FmtP14E0 = UniversalFmt<14, 0, int16_t, uint16_t>;
+using FmtP14E1 = UniversalFmt<14, 1, int16_t, uint16_t>;
+using FmtP14E2 = UniversalFmt<14, 2, int16_t, uint16_t>;
+using FmtP15E0 = UniversalFmt<15, 0, int16_t, uint16_t>;
+using FmtP15E1 = UniversalFmt<15, 1, int16_t, uint16_t>;
+using FmtP15E2 = UniversalFmt<15, 2, int16_t, uint16_t>;
 using FmtP16E0 = UniversalFmt<16, 0, int16_t, uint16_t>;
 using FmtP16E1 = UniversalFmt<16, 1, int16_t, uint16_t>;
 using FmtP16E2 = UniversalFmt<16, 2, int16_t, uint16_t>;
@@ -2952,6 +2972,94 @@ static inline const char *qalignFormatName() {
     return "p8e1";
   if constexpr (std::is_same_v<Fmt, FmtP8E2>)
     return "p8e2";
+  if constexpr (std::is_same_v<Fmt, FmtP4E0>)
+    return "p4e0";
+  if constexpr (std::is_same_v<Fmt, FmtP4E1>)
+    return "p4e1";
+  if constexpr (std::is_same_v<Fmt, FmtP4E2>)
+    return "p4e2";
+  if constexpr (std::is_same_v<Fmt, FmtP4E3>)
+    return "p4e3";
+  if constexpr (std::is_same_v<Fmt, FmtP5E0>)
+    return "p5e0";
+  if constexpr (std::is_same_v<Fmt, FmtP5E1>)
+    return "p5e1";
+  if constexpr (std::is_same_v<Fmt, FmtP5E2>)
+    return "p5e2";
+  if constexpr (std::is_same_v<Fmt, FmtP5E3>)
+    return "p5e3";
+  if constexpr (std::is_same_v<Fmt, FmtP6E0>)
+    return "p6e0";
+  if constexpr (std::is_same_v<Fmt, FmtP6E1>)
+    return "p6e1";
+  if constexpr (std::is_same_v<Fmt, FmtP6E2>)
+    return "p6e2";
+  if constexpr (std::is_same_v<Fmt, FmtP6E3>)
+    return "p6e3";
+  if constexpr (std::is_same_v<Fmt, FmtP7E0>)
+    return "p7e0";
+  if constexpr (std::is_same_v<Fmt, FmtP7E1>)
+    return "p7e1";
+  if constexpr (std::is_same_v<Fmt, FmtP7E2>)
+    return "p7e2";
+  if constexpr (std::is_same_v<Fmt, FmtP7E3>)
+    return "p7e3";
+  if constexpr (std::is_same_v<Fmt, FmtP9E0>)
+    return "p9e0";
+  if constexpr (std::is_same_v<Fmt, FmtP9E1>)
+    return "p9e1";
+  if constexpr (std::is_same_v<Fmt, FmtP9E2>)
+    return "p9e2";
+  if constexpr (std::is_same_v<Fmt, FmtP9E3>)
+    return "p9e3";
+  if constexpr (std::is_same_v<Fmt, FmtP10E0>)
+    return "p10e0";
+  if constexpr (std::is_same_v<Fmt, FmtP10E1>)
+    return "p10e1";
+  if constexpr (std::is_same_v<Fmt, FmtP10E2>)
+    return "p10e2";
+  if constexpr (std::is_same_v<Fmt, FmtP11E0>)
+    return "p11e0";
+  if constexpr (std::is_same_v<Fmt, FmtP11E1>)
+    return "p11e1";
+  if constexpr (std::is_same_v<Fmt, FmtP11E2>)
+    return "p11e2";
+  if constexpr (std::is_same_v<Fmt, FmtP12E0>)
+    return "p12e0";
+  if constexpr (std::is_same_v<Fmt, FmtP12E1>)
+    return "p12e1";
+  if constexpr (std::is_same_v<Fmt, FmtP12E2>)
+    return "p12e2";
+  if constexpr (std::is_same_v<Fmt, FmtP13E0>)
+    return "p13e0";
+  if constexpr (std::is_same_v<Fmt, FmtP13E1>)
+    return "p13e1";
+  if constexpr (std::is_same_v<Fmt, FmtP13E2>)
+    return "p13e2";
+  if constexpr (std::is_same_v<Fmt, FmtP14E0>)
+    return "p14e0";
+  if constexpr (std::is_same_v<Fmt, FmtP14E1>)
+    return "p14e1";
+  if constexpr (std::is_same_v<Fmt, FmtP14E2>)
+    return "p14e2";
+  if constexpr (std::is_same_v<Fmt, FmtP15E0>)
+    return "p15e0";
+  if constexpr (std::is_same_v<Fmt, FmtP15E1>)
+    return "p15e1";
+  if constexpr (std::is_same_v<Fmt, FmtP15E2>)
+    return "p15e2";
+  if constexpr (std::is_same_v<Fmt, FmtP16E0>)
+    return "p16e0";
+  if constexpr (std::is_same_v<Fmt, FmtP16E1>)
+    return "p16e1";
+  if constexpr (std::is_same_v<Fmt, FmtP16E2>)
+    return "p16e2";
+  if constexpr (std::is_same_v<Fmt, FmtP32E0>)
+    return "p32e0";
+  if constexpr (std::is_same_v<Fmt, FmtP32E1>)
+    return "p32e1";
+  if constexpr (std::is_same_v<Fmt, FmtP32E2>)
+    return "p32e2";
   return "unknown";
 }
 
@@ -3200,17 +3308,25 @@ static inline std::vector<int> parseIntCsvValuesRuntime(
 
 template <typename Fmt>
 static inline constexpr bool fmtSupportsRuntimeOutputAlps() {
-  return std::is_same_v<Fmt, FmtP8E0> || std::is_same_v<Fmt, FmtP8E1> ||
-         std::is_same_v<Fmt, FmtP8E2>
+  // Runtime/offline output ALPS (activation companding) is supported for all
+  // sub-16-bit universal posit formats (p4..p15). The encode/decode path is
+  // format-generic (asinh companding + Fmt bit decode), so any instantiated
+  // UniversalFmt with nbits in [4,15] qualifies. (Previously hard-limited to p8.)
+  if constexpr (requires { Fmt::nbits; }) {
+    return Fmt::nbits >= 4 && Fmt::nbits <= 15;
+  } else {
 #if !defined(POSIT_USE_UNIVERSAL)
 #if defined(POSIT_USE_SOFTPOSIT_PX1)
-         || std::is_same_v<Fmt, FmtP8E1ViaPX1>
+    if constexpr (std::is_same_v<Fmt, FmtP8E1ViaPX1>)
+      return true;
 #endif
 #if defined(POSIT_USE_SOFTPOSIT_PX2)
-         || std::is_same_v<Fmt, FmtP8E2ViaPX2>
+    if constexpr (std::is_same_v<Fmt, FmtP8E2ViaPX2>)
+      return true;
 #endif
 #endif
-      ;
+    return false;
+  }
 }
 
 template <typename Fmt>
@@ -3857,17 +3973,31 @@ static const bool gLayerRangeAtExitRegistered = []() {
 template <typename Fmt>
 static inline double runtimeOutputAlpsScoreForMeta(
     const std::vector<double> &values, const TensorGPMetadata &meta) {
+  // Score = NSR (noise-to-signal ratio) = sum((q(x)-x)^2) / sum(x^2) = 1/SQNR.
+  // Lower is better (keeps the existing minimize + minGain logic), and
+  // maximizing SQNR == minimizing NSR.
+  //
+  // Previously this was MAE = mean(|q(x)-x|), averaged over ALL values. For
+  // ReLU6 activations (~98% zeros) the MAE is dominated by the many zeros, so
+  // the search picks a theta that keeps zeros accurate but CRUSHES the few large
+  // discriminative values -> features shrink -> accuracy collapse. NSR weights by
+  // signal power (x^2), so the large discriminative values dominate the choice,
+  // preserving them. (Matches the signal-aware metric used for ALPS calibration.)
   if (values.empty())
     return 0.0;
-  double sum = 0.0;
-  size_t n = 0;
+  long double errPow = 0.0L;
+  long double sigPow = 0.0L;
   for (double x : values) {
     if (!std::isfinite(x))
       continue;
-    sum += std::fabs(requantizeTensorValue<Fmt>(x, meta) - x);
-    ++n;
+    double q = requantizeTensorValue<Fmt>(x, meta);
+    long double d = static_cast<long double>(q) - static_cast<long double>(x);
+    errPow += d * d;
+    sigPow += static_cast<long double>(x) * static_cast<long double>(x);
   }
-  return (n > 0) ? (sum / static_cast<double>(n)) : 0.0;
+  if (sigPow <= 0.0L)
+    return static_cast<double>(errPow);  // all-zero signal: fall back to abs error
+  return static_cast<double>(errPow / sigPow);
 }
 
 template <typename Fmt>
@@ -4095,6 +4225,41 @@ static void dumpRuntimeOutputAlpsCalibToPath(const std::string &outPath) {
     wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP8E0>(fout, key, bucket) || wrote;
     wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP8E1>(fout, key, bucket) || wrote;
     wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP8E2>(fout, key, bucket) || wrote;
+#if defined(POSIT_USE_UNIVERSAL)
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP4E0>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP4E1>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP4E2>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP5E0>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP5E1>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP5E2>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP6E0>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP6E1>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP6E2>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP7E0>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP7E1>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP7E2>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP9E0>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP9E1>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP9E2>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP10E0>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP10E1>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP10E2>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP11E0>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP11E1>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP11E2>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP12E0>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP12E1>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP12E2>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP13E0>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP13E1>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP13E2>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP14E0>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP14E1>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP14E2>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP15E0>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP15E1>(fout, key, bucket) || wrote;  // ALPS p4-p15
+    wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP15E2>(fout, key, bucket) || wrote;  // ALPS p4-p15
+#endif
 #if !defined(POSIT_USE_UNIVERSAL)
 #if defined(POSIT_USE_SOFTPOSIT_PX1)
     wrote = emitRuntimeOutputAlpsCalibRowForFormat<FmtP8E1ViaPX1>(fout, key, bucket) || wrote;
@@ -7056,6 +7221,24 @@ static void dequantize_linear_axis_f32_kernel(
 #define POSIT_RUNTIME_ENABLE_P9E1 0
 #define POSIT_RUNTIME_ENABLE_P9E2 0
 #define POSIT_RUNTIME_ENABLE_P9E3 0
+#define POSIT_RUNTIME_ENABLE_P10E0 0
+#define POSIT_RUNTIME_ENABLE_P10E1 0
+#define POSIT_RUNTIME_ENABLE_P10E2 0
+#define POSIT_RUNTIME_ENABLE_P11E0 0
+#define POSIT_RUNTIME_ENABLE_P11E1 0
+#define POSIT_RUNTIME_ENABLE_P11E2 0
+#define POSIT_RUNTIME_ENABLE_P12E0 0
+#define POSIT_RUNTIME_ENABLE_P12E1 0
+#define POSIT_RUNTIME_ENABLE_P12E2 0
+#define POSIT_RUNTIME_ENABLE_P13E0 0
+#define POSIT_RUNTIME_ENABLE_P13E1 0
+#define POSIT_RUNTIME_ENABLE_P13E2 0
+#define POSIT_RUNTIME_ENABLE_P14E0 0
+#define POSIT_RUNTIME_ENABLE_P14E1 0
+#define POSIT_RUNTIME_ENABLE_P14E2 0
+#define POSIT_RUNTIME_ENABLE_P15E0 0
+#define POSIT_RUNTIME_ENABLE_P15E1 0
+#define POSIT_RUNTIME_ENABLE_P15E2 0
 #define POSIT_RUNTIME_ENABLE_P16E0 0
 #define POSIT_RUNTIME_ENABLE_P16E1 0
 #define POSIT_RUNTIME_ENABLE_P16E2 0
@@ -7154,6 +7337,78 @@ static void dequantize_linear_axis_f32_kernel(
 #undef POSIT_RUNTIME_ENABLE_P9E3
 #define POSIT_RUNTIME_ENABLE_P9E3 1
 #endif
+#if defined(POSIT_RUNTIME_FMT_P10E0)
+#undef POSIT_RUNTIME_ENABLE_P10E0
+#define POSIT_RUNTIME_ENABLE_P10E0 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P10E1)
+#undef POSIT_RUNTIME_ENABLE_P10E1
+#define POSIT_RUNTIME_ENABLE_P10E1 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P10E2)
+#undef POSIT_RUNTIME_ENABLE_P10E2
+#define POSIT_RUNTIME_ENABLE_P10E2 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P11E0)
+#undef POSIT_RUNTIME_ENABLE_P11E0
+#define POSIT_RUNTIME_ENABLE_P11E0 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P11E1)
+#undef POSIT_RUNTIME_ENABLE_P11E1
+#define POSIT_RUNTIME_ENABLE_P11E1 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P11E2)
+#undef POSIT_RUNTIME_ENABLE_P11E2
+#define POSIT_RUNTIME_ENABLE_P11E2 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P12E0)
+#undef POSIT_RUNTIME_ENABLE_P12E0
+#define POSIT_RUNTIME_ENABLE_P12E0 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P12E1)
+#undef POSIT_RUNTIME_ENABLE_P12E1
+#define POSIT_RUNTIME_ENABLE_P12E1 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P12E2)
+#undef POSIT_RUNTIME_ENABLE_P12E2
+#define POSIT_RUNTIME_ENABLE_P12E2 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P13E0)
+#undef POSIT_RUNTIME_ENABLE_P13E0
+#define POSIT_RUNTIME_ENABLE_P13E0 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P13E1)
+#undef POSIT_RUNTIME_ENABLE_P13E1
+#define POSIT_RUNTIME_ENABLE_P13E1 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P13E2)
+#undef POSIT_RUNTIME_ENABLE_P13E2
+#define POSIT_RUNTIME_ENABLE_P13E2 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P14E0)
+#undef POSIT_RUNTIME_ENABLE_P14E0
+#define POSIT_RUNTIME_ENABLE_P14E0 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P14E1)
+#undef POSIT_RUNTIME_ENABLE_P14E1
+#define POSIT_RUNTIME_ENABLE_P14E1 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P14E2)
+#undef POSIT_RUNTIME_ENABLE_P14E2
+#define POSIT_RUNTIME_ENABLE_P14E2 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P15E0)
+#undef POSIT_RUNTIME_ENABLE_P15E0
+#define POSIT_RUNTIME_ENABLE_P15E0 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P15E1)
+#undef POSIT_RUNTIME_ENABLE_P15E1
+#define POSIT_RUNTIME_ENABLE_P15E1 1
+#endif
+#if defined(POSIT_RUNTIME_FMT_P15E2)
+#undef POSIT_RUNTIME_ENABLE_P15E2
+#define POSIT_RUNTIME_ENABLE_P15E2 1
+#endif
 #if defined(POSIT_RUNTIME_FMT_P16E0)
 #undef POSIT_RUNTIME_ENABLE_P16E0
 #define POSIT_RUNTIME_ENABLE_P16E0 1
@@ -7202,6 +7457,24 @@ static void dequantize_linear_axis_f32_kernel(
 #define POSIT_RUNTIME_ENABLE_P9E1 1
 #define POSIT_RUNTIME_ENABLE_P9E2 1
 #define POSIT_RUNTIME_ENABLE_P9E3 1
+#define POSIT_RUNTIME_ENABLE_P10E0 1
+#define POSIT_RUNTIME_ENABLE_P10E1 1
+#define POSIT_RUNTIME_ENABLE_P10E2 1
+#define POSIT_RUNTIME_ENABLE_P11E0 1
+#define POSIT_RUNTIME_ENABLE_P11E1 1
+#define POSIT_RUNTIME_ENABLE_P11E2 1
+#define POSIT_RUNTIME_ENABLE_P12E0 1
+#define POSIT_RUNTIME_ENABLE_P12E1 1
+#define POSIT_RUNTIME_ENABLE_P12E2 1
+#define POSIT_RUNTIME_ENABLE_P13E0 1
+#define POSIT_RUNTIME_ENABLE_P13E1 1
+#define POSIT_RUNTIME_ENABLE_P13E2 1
+#define POSIT_RUNTIME_ENABLE_P14E0 1
+#define POSIT_RUNTIME_ENABLE_P14E1 1
+#define POSIT_RUNTIME_ENABLE_P14E2 1
+#define POSIT_RUNTIME_ENABLE_P15E0 1
+#define POSIT_RUNTIME_ENABLE_P15E1 1
+#define POSIT_RUNTIME_ENABLE_P15E2 1
 #define POSIT_RUNTIME_ENABLE_P16E0 1
 #define POSIT_RUNTIME_ENABLE_P16E1 1
 #define POSIT_RUNTIME_ENABLE_P16E2 1
@@ -7279,6 +7552,60 @@ DEFINE_POSIT_RUNTIME_EXPORTS(p9e2, FmtP9E2, int16_t)
 #endif
 #if POSIT_RUNTIME_ENABLE_P9E3
 DEFINE_POSIT_RUNTIME_EXPORTS(p9e3, FmtP9E3, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P10E0
+DEFINE_POSIT_RUNTIME_EXPORTS(p10e0, FmtP10E0, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P10E1
+DEFINE_POSIT_RUNTIME_EXPORTS(p10e1, FmtP10E1, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P10E2
+DEFINE_POSIT_RUNTIME_EXPORTS(p10e2, FmtP10E2, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P11E0
+DEFINE_POSIT_RUNTIME_EXPORTS(p11e0, FmtP11E0, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P11E1
+DEFINE_POSIT_RUNTIME_EXPORTS(p11e1, FmtP11E1, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P11E2
+DEFINE_POSIT_RUNTIME_EXPORTS(p11e2, FmtP11E2, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P12E0
+DEFINE_POSIT_RUNTIME_EXPORTS(p12e0, FmtP12E0, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P12E1
+DEFINE_POSIT_RUNTIME_EXPORTS(p12e1, FmtP12E1, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P12E2
+DEFINE_POSIT_RUNTIME_EXPORTS(p12e2, FmtP12E2, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P13E0
+DEFINE_POSIT_RUNTIME_EXPORTS(p13e0, FmtP13E0, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P13E1
+DEFINE_POSIT_RUNTIME_EXPORTS(p13e1, FmtP13E1, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P13E2
+DEFINE_POSIT_RUNTIME_EXPORTS(p13e2, FmtP13E2, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P14E0
+DEFINE_POSIT_RUNTIME_EXPORTS(p14e0, FmtP14E0, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P14E1
+DEFINE_POSIT_RUNTIME_EXPORTS(p14e1, FmtP14E1, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P14E2
+DEFINE_POSIT_RUNTIME_EXPORTS(p14e2, FmtP14E2, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P15E0
+DEFINE_POSIT_RUNTIME_EXPORTS(p15e0, FmtP15E0, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P15E1
+DEFINE_POSIT_RUNTIME_EXPORTS(p15e1, FmtP15E1, int16_t)
+#endif
+#if POSIT_RUNTIME_ENABLE_P15E2
+DEFINE_POSIT_RUNTIME_EXPORTS(p15e2, FmtP15E2, int16_t)
 #endif
 #if POSIT_RUNTIME_ENABLE_P16E0
 DEFINE_POSIT_RUNTIME_EXPORTS(p16e0, FmtP16E0, int16_t)
