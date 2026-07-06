@@ -1000,7 +1000,7 @@ struct ConvertPositToKrnlPass
         RewritePatternSet cleanupPatterns(&ctx);
         cleanupPatterns.add<LowerONNXReturnToFuncReturn, EraseONNXEntryPoint,
                             EraseONNXNoValueIfDead>(&ctx);
-        if (failed(applyPatternsAndFoldGreedily(module, std::move(cleanupPatterns))))
+        if (failed(applyPatternsGreedily(module, std::move(cleanupPatterns))))
           signalPassFailure();
       }
       return;
@@ -1054,7 +1054,7 @@ struct ConvertPositToKrnlPass
                             LowerTensorConstCastToKrnlGlobal,
                             LowerTensorFromElementsCastToMemref,
                             LowerTensorDimOnCastedMemref>(&ctx);
-      if (failed(applyPatternsAndFoldGreedily(module, std::move(castChainPatterns))))
+      if (failed(applyPatternsGreedily(module, std::move(castChainPatterns))))
         signalPassFailure();
       if (failed(verifyPositRuntimeDescriptorCalls(module)))
         signalPassFailure();
@@ -1150,7 +1150,7 @@ struct ConvertPositToKrnlPass
         LowerPositBitsToF32CastChain, LowerF32ToPositBitsGenericCastChain,
         LowerPositBitsToF32GenericCastChain, LowerTensorFromElementsCastToMemref,
         LowerTensorDimOnCastedMemref>(&ctx);
-    if (failed(applyPatternsAndFoldGreedily(module, std::move(castChainPatterns))))
+    if (failed(applyPatternsGreedily(module, std::move(castChainPatterns))))
       signalPassFailure();
 
     // [FIX] Finalize tensor constant encoding path:

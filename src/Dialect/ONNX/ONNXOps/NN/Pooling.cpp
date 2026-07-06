@@ -47,7 +47,7 @@ LogicalResult ONNXGenericGlobalPoolOpShapeHelper<OP_TYPE>::computeShape() {
 
 template <>
 LogicalResult ONNXMaxRoiPoolOpShapeHelper::computeShape() {
-  ONNXMaxRoiPoolOpAdaptor operandAdaptor(operands, op->getAttrDictionary());
+  ONNXMaxRoiPoolOpAdaptor operandAdaptor(operands, op->getAttrDictionary(), op->getPropertiesStorage());
   IndexExpr channel = createIE->getShapeAsDim(operandAdaptor.getX(), 1);
 
   const auto rois = operandAdaptor.getRois();

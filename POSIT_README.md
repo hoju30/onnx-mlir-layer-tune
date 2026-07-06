@@ -89,6 +89,27 @@ env ONNX_MLIR_POSIT_FORCE_NQDQ=1 POSIT_COMPACT_CONSTANTS=1 \
 
 本實驗用的 ImageNet100 MobileNetV2 / ResNet18 模型（`imagenet100_mobilenetv2.onnx`、`imagenet100_resnet18.onnx` 及其 `-int8-qdq` 版本）**不在本 repo**，是從 HuggingFace ImageNet100 資料集訓練/匯出的，需另外取得；但上述 IR dump 流程對任何 ONNX 模型都適用。
 
+### 0.4 只讓指定 layer 使用 posit（selective layer）
+
+先在 ONNX IR 中找 layer 的 `onnx_node_name`，再用逗號分隔指定：
+
+```bash
+# 只將 Conv_1、Gemm_3 轉成 p8e1，其餘 layer 保持 f32
+env ONNX_MLIR_POSIT_FORCE_NQDQ=1 \
+  POSIT_SELECTIVE_NODES=Conv_1,Gemm_3 \
+  $OPT /tmp/m.onnx.mlir \
+  --shape-inference --convert-onnx-to-posit --posit-format=p8e1 \
+  -o /tmp/m.selective.posit.mlir
+```
+
+名稱必須和 IR 的 `onnx_node_name` **完全一致**。若每層要用不同格式，可改用：
+
+```bash
+POSIT_NODE_FORMATS=Conv_1:16:2,Gemm_3:8:1
+```
+
+格式為 `layer_name:nbits:es`；未列出的 layer 保持 f32。
+
 ---
 
 ## 1. 取得程式碼

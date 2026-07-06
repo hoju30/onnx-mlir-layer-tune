@@ -26,7 +26,7 @@ namespace onnx_mlir {
 
 template <>
 LogicalResult ONNXConstantOpShapeHelper::computeShape() {
-  ONNXConstantOpAdaptor operandAdaptor(operands, op->getAttrDictionary());
+  ONNXConstantOpAdaptor operandAdaptor(operands, op->getAttrDictionary(), op->getPropertiesStorage());
 
   ElementsAttr valAttr;
   if (operandAdaptor.getSparseValue().has_value())

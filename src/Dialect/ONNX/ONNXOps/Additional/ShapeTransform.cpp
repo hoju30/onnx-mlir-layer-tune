@@ -24,7 +24,7 @@ namespace onnx_mlir {
 
 template <>
 LogicalResult ONNXShapeTransformOpShapeHelper::computeShape() {
-  ONNXShapeTransformOpAdaptor operandAdaptor(operands, op->getAttrDictionary());
+  ONNXShapeTransformOpAdaptor operandAdaptor(operands, op->getAttrDictionary(), op->getPropertiesStorage());
   Value input = operandAdaptor.getInput();
   AffineMap indexMap = operandAdaptor.getIndexMap();
 

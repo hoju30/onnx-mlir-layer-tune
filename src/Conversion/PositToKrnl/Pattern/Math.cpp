@@ -54,13 +54,28 @@ static std::string getPositRuntimeConstMetaChannelRegisterName() {
 }
 
 static std::string getPositRuntimeName(StringRef stem) {
-  // Keep the MLIR func.func symbol name clean. During memref-to-LLVM
-  // lowering, MLIR emits/calls the C-interface wrapper by adding the
-  // `_mlir_ciface_` prefix. If we include that prefix here, the final
-  // linked symbol becomes `_mlir_ciface__mlir_ciface_posit_*`.
   return ("posit_" + stem + "_p" + std::to_string(gPositNbits) +
           "e" + std::to_string(gPositEs))
       .str();
+}
+
+// Per-op format helpers for mixed-format lowering.
+static std::pair<unsigned, unsigned> getFormatFromPositType(Type ty) {
+  if (auto shaped = llvm::dyn_cast<ShapedType>(ty))
+    ty = shaped.getElementType();
+  if (auto pt = llvm::dyn_cast<posit::PositType>(ty))
+    return {pt.getNbits(), pt.getEs()};
+  return {gPositNbits, gPositEs};
+}
+
+static std::string getPositRuntimeNameFor(StringRef stem,
+                                          unsigned nbits, unsigned es) {
+  return ("posit_" + stem + "_p" + std::to_string(nbits) +
+          "e" + std::to_string(es)).str();
+}
+
+static UnrankedMemRefType getUnrankedITypeFor(OpBuilder &b, unsigned storageBits) {
+  return UnrankedMemRefType::get(b.getIntegerType(storageBits), 0);
 }
 
 
@@ -210,21 +225,25 @@ static Value allocLikeValue(ConversionPatternRewriter &rewriter, Location loc,
 //   memref<f32> -> tensor<f32> -> tensor<!posit> -> memref<iN>
 // If consumed directly, memref<iN> may just reinterpret raw f32 bytes.
 // Materialize a real posit_from_f32 conversion when this cast chain is detected.
+// nbits=0 → fall back to global format. Pass explicit values for mixed-format ops.
 static Value materializePositFromF32CastChainIfNeeded(
-    ConversionPatternRewriter &rewriter, Location loc, Value v) {
+    ConversionPatternRewriter &rewriter, Location loc, Value v,
+    unsigned nbits = 0, unsigned es = 0) {
+  if (!nbits) { nbits = gPositNbits; es = gPositEs; }
+  unsigned storageBits = getPositStorageBitWidth(nbits);
+
   Value cur = v;
   while (auto mcast = cur.getDefiningOp<memref::CastOp>())
     cur = mcast.getSource();
 
   auto dstTy = llvm::dyn_cast<MemRefType>(cur.getType());
   if (!dstTy || !dstTy.hasRank() ||
-      dstTy.getElementType() != getPositStorageIntType(rewriter))
+      dstTy.getElementType() != rewriter.getIntegerType(storageBits))
     return v;
 
   auto castToMem = cur.getDefiningOp<UnrealizedConversionCastOp>();
   if (!castToMem || castToMem.getNumOperands() != 1)
     return v;
-  // Walk the placeholder cast chain and recover the original memref<f32>.
   Value srcF32 = castToMem.getOperand(0);
   for (int hop = 0; hop < 8; ++hop) {
     while (auto mcast = srcF32.getDefiningOp<memref::CastOp>())
@@ -248,14 +267,14 @@ static Value materializePositFromF32CastChainIfNeeded(
     return v;
 
   auto unrankedF32 = UnrankedMemRefType::get(rewriter.getF32Type(), 0);
-  auto unrankedI = getUnrankedPositBitsType(rewriter);
+  auto unrankedI = getUnrankedITypeFor(rewriter, storageBits);
   Value inU = castToUnranked(rewriter, loc, srcF32, unrankedF32);
   Value outU = castToUnranked(rewriter, loc, out, unrankedI);
 
   ModuleOp module = rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
   auto fnTy = rewriter.getFunctionType(
       {unrankedF32, unrankedI, rewriter.getI64Type()}, {});
-  auto callee = getOrCreateFunc(module, getPositRuntimeName("from_f32"), fnTy);
+  auto callee = getOrCreateFunc(module, getPositRuntimeNameFor("from_f32", nbits, es), fnTy);
   Value qalignKey = cstI64(rewriter, loc, 0);
   rewriter.create<func::CallOp>(loc, callee, ValueRange{inU, outU, qalignKey});
   return out;
@@ -496,16 +515,18 @@ struct PositFromF32OpLowering : public OpConversionPattern<posit::FromF32Op> {
     if (!out)
       return rewriter.notifyMatchFailure(op, "failed to allocate dynamic from_f32 result");
 
+    auto [opNbits, opEs] = getFormatFromPositType(op.getResult().getType());
+    unsigned opStorageBits = getPositStorageBitWidth(opNbits);
     auto unrankedF32 = UnrankedMemRefType::get(rewriter.getF32Type(), 0);
-    auto unrankedI8  = getUnrankedPositBitsType(rewriter);
+    auto unrankedI  = getUnrankedITypeFor(rewriter, opStorageBits);
 
     Value inU  = castToUnranked(rewriter, loc, adaptor.getInput(), unrankedF32);
-    Value outU = castToUnranked(rewriter, loc, out, unrankedI8);
+    Value outU = castToUnranked(rewriter, loc, out, unrankedI);
 
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto fnTy = rewriter.getFunctionType(
-        {unrankedF32, unrankedI8, rewriter.getI64Type()}, {});
-    auto callee = getOrCreateFunc(module, getPositRuntimeName("from_f32"), fnTy);
+        {unrankedF32, unrankedI, rewriter.getI64Type()}, {});
+    auto callee = getOrCreateFunc(module, getPositRuntimeNameFor("from_f32", opNbits, opEs), fnTy);
     Value qalignKeyV = cstI64(rewriter, loc, qalignKey);
 
     rewriter.create<func::CallOp>(loc, callee, ValueRange{inU, outU, qalignKeyV});
@@ -554,15 +575,17 @@ struct PositToF32OpLowering : public OpConversionPattern<posit::ToF32Op> {
     if (!out)
       return rewriter.notifyMatchFailure(op, "failed to allocate dynamic to_f32 result");
 
+    auto [opNbits, opEs] = getFormatFromPositType(op.getInput().getType());
+    unsigned opStorageBits = getPositStorageBitWidth(opNbits);
     auto unrankedF32 = UnrankedMemRefType::get(rewriter.getF32Type(), 0);
-    auto unrankedI8  = getUnrankedPositBitsType(rewriter);
+    auto unrankedI  = getUnrankedITypeFor(rewriter, opStorageBits);
 
-    Value inU  = castToUnranked(rewriter, loc, adaptor.getInput(), unrankedI8);
+    Value inU  = castToUnranked(rewriter, loc, adaptor.getInput(), unrankedI);
     Value outU = castToUnranked(rewriter, loc, out, unrankedF32);
 
     ModuleOp module = op->getParentOfType<ModuleOp>();
-    auto fnTy = rewriter.getFunctionType({unrankedI8, unrankedF32}, {});
-    auto callee = getOrCreateFunc(module, getPositRuntimeName("to_f32"), fnTy);
+    auto fnTy = rewriter.getFunctionType({unrankedI, unrankedF32}, {});
+    auto callee = getOrCreateFunc(module, getPositRuntimeNameFor("to_f32", opNbits, opEs), fnTy);
 
     rewriter.create<func::CallOp>(loc, callee, ValueRange{inU, outU});
     rewriter.replaceOp(op, out);
@@ -1165,12 +1188,14 @@ struct PositGemmOpLowering : public OpConversionPattern<posit::GemmOp> {
     if (auto tb = op->getAttrOfType<IntegerAttr>("transB")) transB = tb.getValue().getSExtValue();
     if (auto a = op->getAttrOfType<IntegerAttr>("qalign_key")) qalignKey = getInt64Safe(a);
 
+    auto [opNbits, opEs] = getFormatFromPositType(op.getResult().getType());
+    unsigned opStorageBits = getPositStorageBitWidth(opNbits);
     Value aPrepared = materializePositFromF32CastChainIfNeeded(
-        rewriter, loc, adaptor.getA());
+        rewriter, loc, adaptor.getA(), opNbits, opEs);
     Value bPrepared = materializePositFromF32CastChainIfNeeded(
-        rewriter, loc, adaptor.getB());
+        rewriter, loc, adaptor.getB(), opNbits, opEs);
     Value cPrepared = materializePositFromF32CastChainIfNeeded(
-        rewriter, loc, adaptor.getC());
+        rewriter, loc, adaptor.getC(), opNbits, opEs);
 
     auto aTy = llvm::dyn_cast<MemRefType>(aPrepared.getType());
     auto bTy = llvm::dyn_cast<MemRefType>(bPrepared.getType());
@@ -1227,20 +1252,20 @@ struct PositGemmOpLowering : public OpConversionPattern<posit::GemmOp> {
                     ? rewriter.create<memref::AllocOp>(loc, outTy)
                     : rewriter.create<memref::AllocOp>(loc, outTy, dynDims);
 
-    auto unrankedI8 = getUnrankedPositBitsType(rewriter);
+    auto unrankedI = getUnrankedITypeFor(rewriter, opStorageBits);
 
-    Value aU   = castToUnranked(rewriter, loc, aPrepared, unrankedI8);
-    Value bU   = castToUnranked(rewriter, loc, bPrepared, unrankedI8);
-    Value cU   = castToUnranked(rewriter, loc, cPrepared, unrankedI8);
-    Value outU = castToUnranked(rewriter, loc, out, unrankedI8);
+    Value aU   = castToUnranked(rewriter, loc, aPrepared, unrankedI);
+    Value bU   = castToUnranked(rewriter, loc, bPrepared, unrankedI);
+    Value cU   = castToUnranked(rewriter, loc, cPrepared, unrankedI);
+    Value outU = castToUnranked(rewriter, loc, out, unrankedI);
 
     ModuleOp module = op->getParentOfType<ModuleOp>();
-    SmallVector<Type> inTys = {unrankedI8, unrankedI8, unrankedI8, unrankedI8,
+    SmallVector<Type> inTys = {unrankedI, unrankedI, unrankedI, unrankedI,
                                rewriter.getF32Type(), rewriter.getF32Type(),
                                rewriter.getI64Type(), rewriter.getI64Type(),
                                rewriter.getI64Type()};
     auto fnTy = rewriter.getFunctionType(inTys, {});
-    auto callee = getOrCreateFunc(module, getPositRuntimeName("gemm"), fnTy);
+    auto callee = getOrCreateFunc(module, getPositRuntimeNameFor("gemm", opNbits, opEs), fnTy);
 
     rewriter.create<func::CallOp>(
         loc, callee,

@@ -16,11 +16,12 @@ if(OMP_SUPPORTED)
     DOWNLOAD_COMMAND ""
     # Build with LIBOMP_ENABLE_SHARED=OFF so that libomp.a can be embedded into model.so
     # Since OpenMP is not exposed in the LLVM build directory, it must be configured
-    # and built separately in its own build directory
+    # and built separately via the runtimes entry point (standalone build removed in LLVM 20+)
     CONFIGURE_COMMAND sh -c "CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} \
-                             cmake -G Ninja -S ${OPENMP_SOURCE_DIR} \
+                             cmake -G Ninja -S ${LLVM_BUILD_MAIN_SRC_DIR}/../runtimes \
                                 -B ${OMP_TOPDIR}/openmp-build \
                                 -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
+                                -DLLVM_ENABLE_RUNTIMES=openmp \
                                 -DLIBOMP_ENABLE_SHARED=OFF"
 
     BUILD_COMMAND sh -c "cmake --build ${OMP_TOPDIR}/openmp-build --target omp"
@@ -29,9 +30,9 @@ if(OMP_SUPPORTED)
 
   add_custom_target(ompruntime
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${OMP_TOPDIR}/openmp-build/runtime/src/libomp.a ${ONNX_MLIR_LIBRARY_PATH}/libompruntime.a
+            ${OMP_TOPDIR}/openmp-build/openmp/runtime/src/libomp.a ${ONNX_MLIR_LIBRARY_PATH}/libompruntime.a
     DEPENDS OMomp
-    BYPRODUCTS ${OMP_TOPDIR}/openmp-build/runtime/src/libomp.a
+    BYPRODUCTS ${OMP_TOPDIR}/openmp-build/openmp/runtime/src/libomp.a
   )
 
   install(FILES ${ONNX_MLIR_LIBRARY_PATH}/libompruntime.a DESTINATION lib)

@@ -39,7 +39,7 @@ namespace onnx_mlir {
 template <typename OP_TYPE>
 LogicalResult ONNXCommonSqueezeOpShapeHelper<OP_TYPE>::customComputeShape(
     DimsExpr &squeezedDims, bool axesFromShape) {
-  typename OP_TYPE::Adaptor operandAdaptor(operands, op->getAttrDictionary());
+  typename OP_TYPE::Adaptor operandAdaptor(operands, op->getAttrDictionary(), op->getPropertiesStorage());
   DimsExpr outputDims;
   Value data = operandAdaptor.getData();
   if (!hasShapeAndRank(data)) {
@@ -123,7 +123,7 @@ void ONNXSqueezeV11OpShapeHelper::saveAxes() {
 
 template <>
 LogicalResult ONNXSqueezeOpShapeHelper::computeShape() {
-  ONNXSqueezeOpAdaptor operandAdaptor(operands, op->getAttrDictionary());
+  ONNXSqueezeOpAdaptor operandAdaptor(operands, op->getAttrDictionary(), op->getPropertiesStorage());
   Value axes = operandAdaptor.getAxes();
   SmallVector<IndexExpr, 4> squeezedDims;
   bool squeezeFromShape = false;
@@ -136,7 +136,7 @@ LogicalResult ONNXSqueezeOpShapeHelper::computeShape() {
 
 template <>
 LogicalResult ONNXSqueezeV11OpShapeHelper::computeShape() {
-  ONNXSqueezeV11OpAdaptor operandAdaptor(operands, op->getAttrDictionary());
+  ONNXSqueezeV11OpAdaptor operandAdaptor(operands, op->getAttrDictionary(), op->getPropertiesStorage());
   auto axesAttr = operandAdaptor.getAxesAttr();
   SmallVector<IndexExpr, 4> squeezedDims;
   bool squeezeFromShape = false;

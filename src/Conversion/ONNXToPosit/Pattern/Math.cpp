@@ -99,6 +99,64 @@ static Value createONNXTensorConstant(OpBuilder &rewriter, Location loc,
   return rewriter.create(st)->getResult(0);
 }
 
+// ── Per-layer format map support ─────────────────────────────────────────
+
+using FormatMap = std::map<std::string, std::pair<unsigned, unsigned>>;
+
+static std::pair<unsigned, unsigned>
+getOpFormat(Operation *op, const FormatMap &fmtMap,
+            unsigned defNbits, unsigned defEs) {
+  if (auto nm = op->getAttrOfType<StringAttr>("onnx_node_name")) {
+    auto it = fmtMap.find(nm.getValue().str());
+    if (it != fmtMap.end())
+      return it->second;
+  }
+  return {defNbits, defEs};
+}
+
+static Type makePositTensorType(Type srcTy, unsigned nbits, unsigned es,
+                                MLIRContext *ctx) {
+  auto elem = posit::PositType::get(ctx, nbits, es);
+  if (auto rtt = llvm::dyn_cast<RankedTensorType>(srcTy))
+    return RankedTensorType::get(rtt.getShape(), elem);
+  if (llvm::isa<UnrankedTensorType>(srcTy))
+    return UnrankedTensorType::get(elem);
+  return elem;
+}
+
+// Cast val to posit<nbits,es>. Routes posit→posit through f32 so krnl
+// lowering can resolve each cast independently via posit_to/from_f32.
+static Value castToPositFormat(ConversionPatternRewriter &rewriter, Location loc,
+                               Value val, unsigned nbits, unsigned es) {
+  auto tgtElem = posit::PositType::get(rewriter.getContext(), nbits, es);
+  auto elemOf = [](Type t) -> Type {
+    if (auto s = llvm::dyn_cast<ShapedType>(t)) return s.getElementType();
+    return t;
+  };
+  if (elemOf(val.getType()) == tgtElem)
+    return val;
+  Value v = val;
+  if (llvm::isa<posit::PositType>(elemOf(v.getType()))) {
+    Type f32Elem = rewriter.getF32Type();
+    Type f32Ty = v.getType();
+    if (auto rtt = llvm::dyn_cast<RankedTensorType>(f32Ty))
+      f32Ty = RankedTensorType::get(rtt.getShape(), f32Elem);
+    else if (llvm::isa<UnrankedTensorType>(f32Ty))
+      f32Ty = UnrankedTensorType::get(f32Elem);
+    else
+      f32Ty = f32Elem;
+    v = rewriter.create<UnrealizedConversionCastOp>(loc, f32Ty, v).getResult(0);
+  }
+  Type dstTy = v.getType();
+  if (auto rtt = llvm::dyn_cast<RankedTensorType>(dstTy))
+    dstTy = RankedTensorType::get(rtt.getShape(), tgtElem);
+  else if (llvm::isa<UnrankedTensorType>(dstTy))
+    dstTy = UnrankedTensorType::get(tgtElem);
+  else
+    dstTy = tgtElem;
+  return rewriter.create<UnrealizedConversionCastOp>(loc, dstTy, v).getResult(0);
+}
+
 static Value stripUnrealizedCast(Value v) {
   Value cur = v;
   while (auto cast = cur.getDefiningOp<UnrealizedConversionCastOp>()) {
@@ -1314,8 +1372,15 @@ static Value createCompactPositConstantIfEnabled(ConversionPatternRewriter &rewr
   if (!parseEnvBoolLocal("ONNX_MLIR_POSIT_COMPACT_CONSTANTS", false) &&
       !parseEnvBoolLocal("POSIT_COMPACT_CONSTANTS", false))
     return Value();
+  // Compile-time constant baking is normally reserved for the full nqdq
+  // path. Also allow it for selective-node mode (POSIT_SELECTIVE_NODES set)
+  // so constants feeding a selected node get baked to posit at compile time
+  // instead of paying a per-inference posit_from_f32 re-encode cost.
+  const char *selectiveNodesEnv = std::getenv("POSIT_SELECTIVE_NODES");
+  const bool selectiveModeActive = selectiveNodesEnv && *selectiveNodesEnv;
   if (!parseEnvBoolLocal("ONNX_MLIR_POSIT_FORCE_NQDQ", false) &&
-      !parseEnvBoolLocal("POSIT_FORCE_NQDQ_POSIT", false))
+      !parseEnvBoolLocal("POSIT_FORCE_NQDQ_POSIT", false) &&
+      !selectiveModeActive)
     return Value();
   // Only compact formats whose storage is currently modeled as i8/i16/i32 raw
   // bits in posit.constant. Keep qdq-posit untouched; this path is for
@@ -1663,27 +1728,31 @@ static Value buildZeroPositTensorConst(ConversionPatternRewriter &rewriter,
 
 struct ONNXAddOpLowering : public OpConversionPattern<mlir::ONNXAddOp> {
   using OpConversionPattern<mlir::ONNXAddOp>::OpConversionPattern;
-  ONNXAddOpLowering(TypeConverter &tc, MLIRContext *ctx, unsigned nbits, unsigned es)
+  ONNXAddOpLowering(TypeConverter &tc, MLIRContext *ctx, unsigned nbits, unsigned es,
+                    const FormatMap *fmtMap = nullptr)
       : OpConversionPattern<mlir::ONNXAddOp>(tc, ctx), nbits(nbits), es(es),
-        storageBits(getPositStorageBitWidth(nbits)) {}
+        storageBits(getPositStorageBitWidth(nbits)), fmtMap(fmtMap) {}
 
   LogicalResult matchAndRewrite(mlir::ONNXAddOp op,
                                 typename OpConversionPattern::OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
 
-    // 把 result type 用 TypeConverter 轉成 posit 型別 (tensor<...x!posit.type<8,0>>)
+    auto [opNbits, opEs] = fmtMap
+        ? getOpFormat(op.getOperation(), *fmtMap, nbits, es)
+        : std::make_pair(nbits, es);
+    unsigned opStorageBits = getPositStorageBitWidth(opNbits);
+
     Type origOutType = op.getResult().getType();
-    Type convertedType = getTypeConverter()->convertType(origOutType);
+    Type convertedType = makePositTensorType(origOutType, opNbits, opEs, op.getContext());
     if (!convertedType)
       return rewriter.notifyMatchFailure(op, "failed to convert result type");
 
-    // adaptor 的 operands 已經是「轉換後」的型別
     if (adaptor.getOperands().size() != 2)
       return rewriter.notifyMatchFailure(op, "expected 2 operands");
 
-    Value lhs = adaptor.getOperands()[0];
-    Value rhs = adaptor.getOperands()[1];
+    Value lhs = castToPositFormat(rewriter, loc, adaptor.getOperands()[0], opNbits, opEs);
+    Value rhs = castToPositFormat(rewriter, loc, adaptor.getOperands()[1], opNbits, opEs);
 
     // posit.add requires identical operand/result types. When ONNX output type is
     // unranked, pick a ranked operand type (if available) for stable lowering.
@@ -1723,7 +1792,7 @@ struct ONNXAddOpLowering : public OpConversionPattern<mlir::ONNXAddOp> {
 
     if (addRtt && rhs && rhs.getType() != addTy) {
       if (Value bc =
-              broadcastPositConstantIfNeeded(rewriter, loc, rhs, addRtt, storageBits))
+              broadcastPositConstantIfNeeded(rewriter, loc, rhs, addRtt, opStorageBits))
         rhs = bc;
     }
 
@@ -1749,6 +1818,7 @@ struct ONNXAddOpLowering : public OpConversionPattern<mlir::ONNXAddOp> {
   unsigned nbits;
   unsigned es;
   unsigned storageBits;
+  const FormatMap *fmtMap;
 };
 
 // sub mul div 新增
@@ -3282,30 +3352,35 @@ struct ONNXFlattenOpLowering : public OpConversionPattern<mlir::ONNXFlattenOp> {
 
 struct ONNXConvOpLowering : public OpConversionPattern<mlir::ONNXConvOp> {
   using OpConversionPattern<mlir::ONNXConvOp>::OpConversionPattern;
-  ONNXConvOpLowering(TypeConverter &tc, MLIRContext *ctx, unsigned nbits, unsigned es)
+  ONNXConvOpLowering(TypeConverter &tc, MLIRContext *ctx, unsigned nbits, unsigned es,
+                     const FormatMap *fmtMap = nullptr)
       : OpConversionPattern<mlir::ONNXConvOp>(tc, ctx), nbits(nbits), es(es),
-        storageBits(getPositStorageBitWidth(nbits)) {}
+        storageBits(getPositStorageBitWidth(nbits)), fmtMap(fmtMap) {}
 
   LogicalResult matchAndRewrite(mlir::ONNXConvOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    Type outTy = getTypeConverter()->convertType(op.getResult().getType());
+    auto [opNbits, opEs] = fmtMap
+        ? getOpFormat(op.getOperation(), *fmtMap, nbits, es)
+        : std::make_pair(nbits, es);
+    unsigned opStorageBits = getPositStorageBitWidth(opNbits);
+    Type outTy = makePositTensorType(op.getResult().getType(), opNbits, opEs, op.getContext());
     if (!outTy)
       return rewriter.notifyMatchFailure(op, "failed to convert conv result type");
 
     auto ops = adaptor.getOperands();
     if (ops.size() < 2)
       return rewriter.notifyMatchFailure(op, "conv expects at least X and W");
-    Value x = ops[0];
-    Value w = ops[1];
+    Value x = castToPositFormat(rewriter, loc, ops[0], opNbits, opEs);
+    Value w = castToPositFormat(rewriter, loc, ops[1], opNbits, opEs);
     Value b;
     if (ops.size() >= 3) {
       b = ops[2];
       if (b && llvm::isa<NoneType>(b.getType()))
         b = Value();
-      // [FIX] ONNX bias may be represented as `none` (from onnx.NoValue / ONNXNoneOp).
-      // If so, materialize a zero bias tensor.
     }
+    if (b)
+      b = castToPositFormat(rewriter, loc, b, opNbits, opEs);
     if (!b) {
       int64_t c = ShapedType::kDynamic;
       Type elemTy;
@@ -3327,7 +3402,7 @@ struct ONNXConvOpLowering : public OpConversionPattern<mlir::ONNXConvOp> {
         return rewriter.notifyMatchFailure(
             op, "cannot materialize default conv bias without known output channels");
       auto biasTy = RankedTensorType::get({c}, elemTy);
-      b = buildZeroPositTensorConst(rewriter, loc, biasTy, storageBits);
+      b = buildZeroPositTensorConst(rewriter, loc, biasTy, opStorageBits);
       if (!b)
         return rewriter.notifyMatchFailure(op, "failed to build default bias constant");
     }
@@ -3353,23 +3428,29 @@ struct ONNXConvOpLowering : public OpConversionPattern<mlir::ONNXConvOp> {
   unsigned nbits;
   unsigned es;
   unsigned storageBits;
+  const FormatMap *fmtMap;
 };
 
 struct ONNXMatMulOpLowering : public OpConversionPattern<mlir::ONNXMatMulOp> {
   using OpConversionPattern<mlir::ONNXMatMulOp>::OpConversionPattern;
-  ONNXMatMulOpLowering(TypeConverter &tc, MLIRContext *ctx, unsigned nbits, unsigned es)
+  ONNXMatMulOpLowering(TypeConverter &tc, MLIRContext *ctx, unsigned nbits, unsigned es,
+                       const FormatMap *fmtMap = nullptr)
       : OpConversionPattern<mlir::ONNXMatMulOp>(tc, ctx), nbits(nbits), es(es),
-        storageBits(getPositStorageBitWidth(nbits)) {}
+        storageBits(getPositStorageBitWidth(nbits)), fmtMap(fmtMap) {}
 
   LogicalResult matchAndRewrite(mlir::ONNXMatMulOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    Type outTy = getTypeConverter()->convertType(op.getResult().getType());
+    auto [opNbits, opEs] = fmtMap
+        ? getOpFormat(op.getOperation(), *fmtMap, nbits, es)
+        : std::make_pair(nbits, es);
+    unsigned opStorageBits = getPositStorageBitWidth(opNbits);
+    Type outTy = makePositTensorType(op.getResult().getType(), opNbits, opEs, op.getContext());
     if (!outTy)
       return rewriter.notifyMatchFailure(op, "failed to convert matmul result type");
 
-    Value a = adaptor.getOperands()[0];
-    Value b = adaptor.getOperands()[1];
+    Value a = castToPositFormat(rewriter, loc, adaptor.getOperands()[0], opNbits, opEs);
+    Value b = castToPositFormat(rewriter, loc, adaptor.getOperands()[1], opNbits, opEs);
 
     Type elemTy;
     if (auto outRtt = llvm::dyn_cast<RankedTensorType>(outTy))
@@ -3379,7 +3460,7 @@ struct ONNXMatMulOpLowering : public OpConversionPattern<mlir::ONNXMatMulOp> {
     if (!elemTy)
       return rewriter.notifyMatchFailure(op, "cannot infer matmul output element type");
     auto cTy = RankedTensorType::get({1}, elemTy);
-    Value c = buildZeroPositTensorConst(rewriter, loc, cTy, storageBits);
+    Value c = buildZeroPositTensorConst(rewriter, loc, cTy, opStorageBits);
     if (!c)
       return rewriter.notifyMatchFailure(op, "failed to build GEMM C=0 constant");
 
@@ -3401,23 +3482,29 @@ struct ONNXMatMulOpLowering : public OpConversionPattern<mlir::ONNXMatMulOp> {
   unsigned nbits;
   unsigned es;
   unsigned storageBits;
+  const FormatMap *fmtMap;
 };
 
 struct ONNXGemmOpLowering : public OpConversionPattern<mlir::ONNXGemmOp> {
   using OpConversionPattern<mlir::ONNXGemmOp>::OpConversionPattern;
-  ONNXGemmOpLowering(TypeConverter &tc, MLIRContext *ctx, unsigned nbits, unsigned es)
+  ONNXGemmOpLowering(TypeConverter &tc, MLIRContext *ctx, unsigned nbits, unsigned es,
+                     const FormatMap *fmtMap = nullptr)
       : OpConversionPattern<mlir::ONNXGemmOp>(tc, ctx), nbits(nbits), es(es),
-        storageBits(getPositStorageBitWidth(nbits)) {}
+        storageBits(getPositStorageBitWidth(nbits)), fmtMap(fmtMap) {}
 
   LogicalResult matchAndRewrite(mlir::ONNXGemmOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    Type outTy = getTypeConverter()->convertType(op.getResult().getType());
+    auto [opNbits, opEs] = fmtMap
+        ? getOpFormat(op.getOperation(), *fmtMap, nbits, es)
+        : std::make_pair(nbits, es);
+    unsigned opStorageBits = getPositStorageBitWidth(opNbits);
+    Type outTy = makePositTensorType(op.getResult().getType(), opNbits, opEs, op.getContext());
     if (!outTy)
       return rewriter.notifyMatchFailure(op, "failed to convert gemm result type");
 
-    Value a = adaptor.getA();
-    Value b = adaptor.getB();
+    Value a = castToPositFormat(rewriter, loc, adaptor.getA(), opNbits, opEs);
+    Value b = castToPositFormat(rewriter, loc, adaptor.getB(), opNbits, opEs);
     Value c = adaptor.getC();
     if (!c || llvm::isa<NoneType>(c.getType())) {
       Type elemTy;
@@ -3428,9 +3515,11 @@ struct ONNXGemmOpLowering : public OpConversionPattern<mlir::ONNXGemmOp> {
       if (!elemTy)
         return rewriter.notifyMatchFailure(op, "cannot infer gemm output element type");
       auto cTy = RankedTensorType::get({1}, elemTy);
-      c = buildZeroPositTensorConst(rewriter, loc, cTy, storageBits);
+      c = buildZeroPositTensorConst(rewriter, loc, cTy, opStorageBits);
       if (!c)
         return rewriter.notifyMatchFailure(op, "failed to build GEMM default C");
+    } else {
+      c = castToPositFormat(rewriter, loc, c, opNbits, opEs);
     }
 
     OperationState st(loc, mlir::posit::GemmOp::getOperationName());
@@ -3452,6 +3541,7 @@ struct ONNXGemmOpLowering : public OpConversionPattern<mlir::ONNXGemmOp> {
   unsigned nbits;
   unsigned es;
   unsigned storageBits;
+  const FormatMap *fmtMap;
 };
 
 struct ONNXReduceMeanV13OpLowering
@@ -3601,21 +3691,20 @@ void populateONNXToPositConversionPattern(TypeConverter &typeConverter,
                                           bool alignToInt8QDomain,
                                           bool preferDirectF32FromQDQ,
                                           bool preferDirectPositFromQDQ,
-                                          bool preferStoreAsPosit) {
+                                          bool preferStoreAsPosit,
+                                          const FormatMap *fmtMap) {
   patterns.add<ONNXDequantizeLinearOpLowering>(
       typeConverter, ctx, nbits, es, alignToInt8QDomain,
       preferDirectF32FromQDQ, preferDirectPositFromQDQ, preferStoreAsPosit);
-  patterns.add<ONNXAddOpLowering>(typeConverter, ctx, nbits, es);
+  patterns.add<ONNXAddOpLowering>(typeConverter, ctx, nbits, es, fmtMap);
   patterns.add<ONNXSubOpLowering, ONNXMulOpLowering, ONNXDivOpLowering>(
       typeConverter, ctx);
   patterns.add<ONNXReshapeOpLowering, ONNXUnsqueezeOpLowering,
       ONNXReluOpLowering, ONNXClipOpLowering, ONNXMaxPoolSingleOutOpLowering,
       ONNXFlattenOpLowering, ONNXReduceMeanV13OpLowering>(typeConverter, ctx);
-  patterns.add<ONNXConvOpLowering, ONNXMatMulOpLowering, ONNXGemmOpLowering>(
-      typeConverter, ctx, nbits, es);
-  // Required by the nqdq/f32 -> posit path. When ONNX_MLIR_POSIT_FORCE_NQDQ
-  // is set, large floating ONNX constants become illegal and are rewritten into
-  // compact posit raw-bit constants (p8/p16) or f32->posit boundaries.
+  patterns.add<ONNXConvOpLowering>(typeConverter, ctx, nbits, es, fmtMap);
+  patterns.add<ONNXMatMulOpLowering>(typeConverter, ctx, nbits, es, fmtMap);
+  patterns.add<ONNXGemmOpLowering>(typeConverter, ctx, nbits, es, fmtMap);
   patterns.add<ONNXConstantOpLowering>(typeConverter, ctx, nbits, es);
 }
 

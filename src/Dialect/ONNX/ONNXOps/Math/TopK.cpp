@@ -27,7 +27,7 @@ namespace onnx_mlir {
 template <>
 LogicalResult ONNXTopKOpShapeHelper::computeShape() {
   DimsExpr outputDims;
-  ONNXTopKOpAdaptor operandAdaptor(operands, op->getAttrDictionary());
+  ONNXTopKOpAdaptor operandAdaptor(operands, op->getAttrDictionary(), op->getPropertiesStorage());
   // Get info about X and K operands.
   Value X = operandAdaptor.getX();
   Value K = operandAdaptor.getK();

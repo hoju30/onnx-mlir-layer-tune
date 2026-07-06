@@ -63,8 +63,29 @@ PositToKrnlTypeConverter::PositToKrnlTypeConverter(unsigned nbits, unsigned es,
     : nbits_(nbits), es_(es) {
   addConversion([](Type t) { return t; });
 
-  addConversion([nbits, ctx](Type t) {
-    return convertPositTensorToMemref(t, nbits, ctx);
+  // Read the actual nbits from the PositType itself so mixed-format models
+  // (e.g. Gemm_3:p8e1 + Gemm_5:p16e2) produce the right memref element type.
+  addConversion([ctx](Type t) -> std::optional<Type> {
+    auto getStorageBits = [](Type elem) -> unsigned {
+      if (auto pt = llvm::dyn_cast<posit::PositType>(elem))
+        return getPositStorageBitWidth(pt.getNbits());
+      return 0;
+    };
+    if (auto ranked = llvm::dyn_cast<RankedTensorType>(t)) {
+      unsigned sb = getStorageBits(ranked.getElementType());
+      if (sb)
+        return MemRefType::get(ranked.getShape(), IntegerType::get(ctx, sb));
+      return tensorToMemrefKeepElem(t, ctx);
+    }
+    if (auto unranked = llvm::dyn_cast<UnrankedTensorType>(t)) {
+      unsigned sb = getStorageBits(unranked.getElementType());
+      if (sb)
+        return UnrankedMemRefType::get(IntegerType::get(ctx, sb), 0);
+      return tensorToMemrefKeepElem(t, ctx);
+    }
+    if (auto pt = llvm::dyn_cast<posit::PositType>(t))
+      return IntegerType::get(ctx, getPositStorageBitWidth(pt.getNbits()));
+    return t;
   });
 
   // materialization：用 unrealized_conversion_cast 先橋接型別落差

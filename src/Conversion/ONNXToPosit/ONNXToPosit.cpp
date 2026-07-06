@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <set>
 #include <string>
 
 // 11/26 pipeline
@@ -42,6 +43,48 @@ using namespace posit;
 
 namespace onnx_mlir {
 namespace {
+
+static std::set<std::string> parseSelectiveNodes() {
+  std::set<std::string> result;
+  const char *e = std::getenv("POSIT_SELECTIVE_NODES");
+  if (!e || !*e)
+    return result;
+  std::string s(e);
+  size_t pos = 0, found;
+  while ((found = s.find(',', pos)) != std::string::npos) {
+    result.insert(s.substr(pos, found - pos));
+    pos = found + 1;
+  }
+  result.insert(s.substr(pos));
+  return result;
+}
+
+// Parse POSIT_NODE_FORMATS=Conv_1:16:2,Gemm_3:8:1 into a map node→(nbits,es).
+static FormatMap parseNodeFormats() {
+  FormatMap result;
+  const char *e = std::getenv("POSIT_NODE_FORMATS");
+  if (!e || !*e)
+    return result;
+  std::string s(e);
+  size_t pos = 0;
+  while (pos < s.size()) {
+    size_t comma = s.find(',', pos);
+    if (comma == std::string::npos) comma = s.size();
+    std::string entry = s.substr(pos, comma - pos);
+    size_t c1 = entry.find(':');
+    if (c1 != std::string::npos) {
+      size_t c2 = entry.find(':', c1 + 1);
+      if (c2 != std::string::npos) {
+        std::string name = entry.substr(0, c1);
+        unsigned nb = static_cast<unsigned>(std::stoul(entry.substr(c1 + 1, c2 - c1 - 1)));
+        unsigned es = static_cast<unsigned>(std::stoul(entry.substr(c2 + 1)));
+        result[name] = {nb, es};
+      }
+    }
+    pos = comma + 1;
+  }
+  return result;
+}
 
 static bool parseONNXToPositEnvBool(const char *name, bool fallback = false) {
   const char *e = std::getenv(name);
@@ -330,6 +373,24 @@ struct ConvertONNXToPositPass
     const unsigned localEs = es;
     PositTypeConverter typeConverter(localNbits, localEs, &ctx);
 
+    // Selective node mode: only ops whose onnx_node_name is in this set are
+    // converted to posit; everything else stays legal (fp32 path).
+    const auto selectiveNodes = parseSelectiveNodes();
+    const bool selectiveMode = !selectiveNodes.empty();
+    auto isSelectiveTarget = [&](Operation *op) -> bool {
+      auto nm = op->getAttrOfType<StringAttr>("onnx_node_name");
+      return nm && selectiveNodes.count(nm.getValue().str()) > 0;
+    };
+
+    // Per-layer format map: POSIT_NODE_FORMATS=Conv_1:16:2,Gemm_3:8:1
+    // Each named op uses its specified (nbits,es); others stay fp32.
+    const auto formatMap = parseNodeFormats();
+    auto isFormatMapTarget = [&](Operation *op) -> bool {
+      if (formatMap.empty()) return false;
+      auto nm = op->getAttrOfType<StringAttr>("onnx_node_name");
+      return nm && formatMap.count(nm.getValue().str()) > 0;
+    };
+
     // For the nqdq/f32 -> posit path, force selected numerical ONNX ops
     // (Conv/Gemm/MatMul/Add/etc.) to lower into the Posit dialect even though
     // their original operands/results are f32. The QDQ path leaves this unset
@@ -360,7 +421,8 @@ struct ConvertONNXToPositPass
     populateONNXToPositConversionPattern(
         typeConverter, patterns, &ctx, localNbits, localEs,
         alignToInt8QDomain, preferDirectF32FromQDQ,
-        localPreferDirectPositFromQDQ, localPreferStoreAsPosit);
+        localPreferDirectPositFromQDQ, localPreferStoreAsPosit,
+        formatMap.empty() ? nullptr : &formatMap);
 
     ConversionTarget target(ctx);
 
@@ -372,8 +434,20 @@ struct ConvertONNXToPositPass
     // Keep ONNX graph terminators/metadata ops legal.
     target.addLegalOp<ONNXReturnOp, ONNXEntryPointOp, ONNXNoneOp,
                       ONNXQuantizeLinearOp>();
+    // In selective mode, constants that feed a selected target op must also
+    // be lowered (ideally to a compile-time posit.constant) instead of
+    // staying fp32 and paying a per-inference posit_from_f32 re-encode cost.
+    auto feedsSelectiveTarget = [&](ONNXConstantOp op) -> bool {
+      if (!selectiveMode && formatMap.empty())
+        return false;
+      for (Operation *user : op.getResult().getUsers())
+        if (isSelectiveTarget(user) || isFormatMapTarget(user))
+          return true;
+      return false;
+    };
+
     target.addDynamicallyLegalOp<ONNXConstantOp>([&](ONNXConstantOp op) {
-      if (!forceAllNumericOpsToPosit)
+      if (!forceAllNumericOpsToPosit && !feedsSelectiveTarget(op))
         return true;
       // Helper constants materialized during ONNX->Posit rewrites must stay
       // legal even when large float ONNX constants are otherwise forced
@@ -415,42 +489,48 @@ struct ConvertONNXToPositPass
       return false;
     };
 
+    // Helper shared by all predicates below.
+    // Format-map mode (POSIT_NODE_FORMATS set): only named ops convert to posit,
+    //   all others stay fp32 regardless of --posit-format.
+    // Selective mode (POSIT_SELECTIVE_NODES set): only named ops convert.
+    // Normal mode (--posit-format only): whole-model posit via forceAllNumericOpsToPosit
+    //   / opNeedsPositConversion.
+    auto isLegal = [&](Operation *op) -> bool {
+      if (!formatMap.empty())
+        return !isFormatMapTarget(op);
+      if (selectiveMode)
+        return !isSelectiveTarget(op);
+      return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op);
+    };
+
     target.addDynamicallyLegalOp<ONNXAddOp>(
-        [&](ONNXAddOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXAddOp op) { return isLegal(op.getOperation()); });
     target.addDynamicallyLegalOp<ONNXSubOp>(
-        [&](ONNXSubOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXSubOp op) { return isLegal(op.getOperation()); });
     target.addDynamicallyLegalOp<ONNXMulOp>(
-        [&](ONNXMulOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXMulOp op) { return isLegal(op.getOperation()); });
     target.addDynamicallyLegalOp<ONNXDivOp>(
-        [&](ONNXDivOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
-    target.addDynamicallyLegalOp<ONNXReshapeOp>([&](ONNXReshapeOp op) {
-      return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation());
-    });
-    target.addDynamicallyLegalOp<ONNXUnsqueezeOp>([&](ONNXUnsqueezeOp op) {
-      return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation());
-    });
+        [&](ONNXDivOp op) { return isLegal(op.getOperation()); });
+    target.addDynamicallyLegalOp<ONNXReshapeOp>(
+        [&](ONNXReshapeOp op) { return isLegal(op.getOperation()); });
+    target.addDynamicallyLegalOp<ONNXUnsqueezeOp>(
+        [&](ONNXUnsqueezeOp op) { return isLegal(op.getOperation()); });
     target.addDynamicallyLegalOp<ONNXReluOp>(
-        [&](ONNXReluOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXReluOp op) { return isLegal(op.getOperation()); });
     target.addDynamicallyLegalOp<ONNXClipOp>(
-        [&](ONNXClipOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXClipOp op) { return isLegal(op.getOperation()); });
     target.addDynamicallyLegalOp<ONNXMaxPoolSingleOutOp>(
-        [&](ONNXMaxPoolSingleOutOp op) {
-          return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation());
-        });
-    target.addDynamicallyLegalOp<ONNXFlattenOp>([&](ONNXFlattenOp op) {
-      return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation());
-    });
+        [&](ONNXMaxPoolSingleOutOp op) { return isLegal(op.getOperation()); });
+    target.addDynamicallyLegalOp<ONNXFlattenOp>(
+        [&](ONNXFlattenOp op) { return isLegal(op.getOperation()); });
     target.addDynamicallyLegalOp<ONNXConvOp>(
-        [&](ONNXConvOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
-    target.addDynamicallyLegalOp<ONNXMatMulOp>([&](ONNXMatMulOp op) {
-      return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation());
-    });
+        [&](ONNXConvOp op) { return isLegal(op.getOperation()); });
+    target.addDynamicallyLegalOp<ONNXMatMulOp>(
+        [&](ONNXMatMulOp op) { return isLegal(op.getOperation()); });
     target.addDynamicallyLegalOp<ONNXGemmOp>(
-        [&](ONNXGemmOp op) { return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation()); });
+        [&](ONNXGemmOp op) { return isLegal(op.getOperation()); });
     target.addDynamicallyLegalOp<ONNXReduceMeanV13Op>(
-        [&](ONNXReduceMeanV13Op op) {
-          return !forceAllNumericOpsToPosit && !opNeedsPositConversion(op.getOperation());
-        });
+        [&](ONNXReduceMeanV13Op op) { return isLegal(op.getOperation()); });
 
     target.markUnknownOpDynamicallyLegal(
         [&](Operation *op) { return true; });

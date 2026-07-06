@@ -1993,7 +1993,7 @@ Value VectorBuilder::fma(Value lhs, Value rhs, Value acc) const {
 
 // Val is required to be a index/integer/float.
 Value VectorBuilder::splat(VectorType vecType, Value val) const {
-  return b().create<vector::SplatOp>(loc(), vecType, val);
+  return b().create<vector::BroadcastOp>(loc(), vecType, val);
 }
 
 Value VectorBuilder::broadcast(VectorType vecType, Value val) const {
