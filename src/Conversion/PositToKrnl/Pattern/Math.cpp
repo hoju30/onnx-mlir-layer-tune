@@ -1252,6 +1252,22 @@ struct PositGemmOpLowering : public OpConversionPattern<posit::GemmOp> {
           } else if (od == 1) {
             dimVal = getDimOrConst(bPrepared, bTy, transB ? 0 : 1);
           }
+        } else if (outTy.getRank() >= 3 && aTy && bTy && aTy.hasRank() &&
+                   bTy.hasRank() && aTy.getRank() == outTy.getRank() &&
+                   bTy.getRank() == outTy.getRank()) {
+          // Batched matmul: out[batch..., M, N]. Leading (batch) dims from A;
+          // M from A's second-last dim (transA-aware), N from B's last dim
+          // (transB-aware). Without this, rank>=3 hit the fallback which copied
+          // A's dim -> wrong N (GPT-2 attention QK^T got [.,.,1,64] instead of
+          // [.,.,1,1]); the runtime gemm then saw an inconsistent output shape
+          // and zeroY'd -> attention all zeros -> logits collapse.
+          int64_t R = outTy.getRank();
+          if (od < R - 2)
+            dimVal = getDimOrConst(aPrepared, aTy, od);
+          else if (od == R - 2)
+            dimVal = getDimOrConst(aPrepared, aTy, transA ? R - 1 : R - 2);
+          else
+            dimVal = getDimOrConst(bPrepared, bTy, transB ? R - 2 : R - 1);
         }
 
         if (!dimVal) {
@@ -1490,6 +1506,13 @@ struct PositReshapeOpLowering : public OpConversionPattern<posit::ReshapeOp> {
         int64_t s = outTy.getDimSize(i);
         sizeVals[i] = cstIndex(s);
         sizes[i] = rewriter.getIndexAttr(s);
+        // BUGFIX: static output dims must also divide out of the inferred (-1)
+        // dim. Previously knownProd only accumulated dynamic dims, so e.g.
+        // reshape [1,1,768] -> [-1,768] computed inferredDim = total/1 = 768
+        // instead of total/768 = 1, making the seq dim = hidden dim and feeding
+        // every transformer gemm an [hidden,hidden] operand (nan/garbage output,
+        // mapped_range guard rejections). Include static dims in knownProd.
+        knownProd = rewriter.create<arith::MulIOp>(loc, knownProd, cstI64(s));
       }
     }
     Value inferredDim = rewriter.create<arith::DivSIOp>(loc, totalInputElems, knownProd);

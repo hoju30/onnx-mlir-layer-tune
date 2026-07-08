@@ -516,6 +516,29 @@ static inline bool positQopF32MathEnabled() {
   return enabled == 1;
 }
 
+// Method B (intra-op parallelism): number of threads for the output-element
+// loops of posit conv/gemm. Default 1 => serial, bit-identical, and identical
+// behavior to before (so existing per-image --jobs commands are unaffected and
+// never oversubscribe). Set POSIT_OMP_THREADS>1 to parallelize a single forward
+// pass. Only effective if the .so was built with -fopenmp; otherwise the omp
+// pragmas are ignored and this value is moot. We use an explicit thread count
+// (via the num_threads clause) instead of OMP_NUM_THREADS, whose default is
+// "all cores" and would silently oversubscribe under process-level --jobs.
+static inline int positOmpThreadCount() {
+  static int n = -1;
+  if (n >= 0)
+    return n;
+  const char *e = std::getenv("POSIT_OMP_THREADS");
+  int v = 1;
+  if (e && *e) {
+    v = std::atoi(e);
+    if (v < 1)
+      v = 1;
+  }
+  n = v;
+  return n;
+}
+
 static inline bool positCsvEnvHasTokenWithLegacy(const char *preferredName,
                                                  const char *legacyName,
                                                  const char *token,
@@ -1620,6 +1643,15 @@ static inline bool is_mapped_range(const void *ptr, size_t bytes) {
   return false;
 }
 
+static inline bool positMappedGuardDisabled() {
+  static int v = -1;
+  if (v >= 0)
+    return v == 1;
+  const char *e = std::getenv("POSIT_DISABLE_MAPPED_GUARD");
+  v = (e && *e && !(std::string(e) == "0" || std::string(e) == "off")) ? 1 : 0;
+  return v == 1;
+}
+
 template <typename T>
 static inline bool has_mapped_dense_storage(const DynamicMemRefType<T> &m) {
   int64_t elems = 0;
@@ -1630,15 +1662,40 @@ static inline bool has_mapped_dense_storage(const DynamicMemRefType<T> &m) {
   }
   if (elems == 0)
     return true;
-  __int128 first = static_cast<__int128>(m.offset);
-  __int128 last = first + static_cast<__int128>(elems) - 1;
-  if (last < 0 || last > static_cast<__int128>(std::numeric_limits<int64_t>::max())) {
+  // Diagnostic/escape hatch: skip the mincore range check (treat any non-null
+  // data as mapped). If GPT-2 runs correctly with this set, the guard was
+  // falsely rejecting valid buffers; if it crashes, the descriptor is genuinely
+  // over-large (a real shape/lowering bug).
+  if (positMappedGuardDisabled())
+    return m.data != nullptr;
+  // Compute the ACTUAL element extent from strides instead of assuming a dense
+  // [offset, offset+elems) block. Broadcast operands (stride-0 dims, e.g. a GPT-2
+  // gemm bias broadcast to [N,M,S] while only N elements are stored) and strided
+  // views have far fewer real elements than the logical product of sizes. The old
+  // dense assumption made byteCount overshoot the real allocation, so the range
+  // was wrongly reported "not mapped" and the op output was zeroed. For a dense
+  // contiguous tensor this yields the same [offset, offset+elems) span as before.
+  __int128 minRel = 0, maxRel = 0;
+  for (int i = 0; i < m.rank; ++i) {
+    if (m.sizes[i] <= 1)
+      continue;
+    __int128 step = static_cast<__int128>(m.sizes[i] - 1) *
+                    static_cast<__int128>(m.strides[i]);
+    if (step >= 0)
+      maxRel += step;
+    else
+      minRel += step;
+  }
+  __int128 first = static_cast<__int128>(m.offset) + minRel;
+  __int128 last = static_cast<__int128>(m.offset) + maxRel;
+  if (first < 0 || last < first ||
+      last > static_cast<__int128>(std::numeric_limits<int64_t>::max())) {
     recordPositFallback(gPositMappedRangeRejectCount, "mapped_range",
-                        "last index out of range");
+                        "element extent out of range");
     return false;
   }
   __int128 startBytes = first * static_cast<__int128>(sizeof(T));
-  __int128 byteCount = static_cast<__int128>(elems) * static_cast<__int128>(sizeof(T));
+  __int128 byteCount = (last - first + 1) * static_cast<__int128>(sizeof(T));
   if (startBytes < 0 || startBytes > static_cast<__int128>(std::numeric_limits<size_t>::max())) {
     recordPositFallback(gPositMappedRangeRejectCount, "mapped_range",
                         "start byte offset out of range");
@@ -5061,6 +5118,10 @@ static void posit_from_f32_kernel(UnrankedMemRefType<float> *In,
     sampleValues.reserve(static_cast<size_t>(perCallBudget));
     sampleOrigValues.reserve(static_cast<size_t>(perCallBudget));
   }
+  // Method B: element-wise f32->posit encode, independent per element. Parallel
+  // only when NOT collecting qalign samples (the sampleValues.push_back below is
+  // not thread-safe); collection is off in normal inference. Bit-identical.
+#pragma omp parallel for if(!collect) num_threads(positOmpThreadCount()) schedule(static)
   for (int64_t i = 0; i < n; ++i) {
     double rawV = static_cast<double>(in.data[in.offset + i]);
     if (collect && perCallBudget > 0 &&
@@ -5110,6 +5171,10 @@ static void posit_to_f32_kernel(UnrankedMemRefType<typename Fmt::MemT> *In,
     return;
   }
   int64_t n = std::min(inElems, outElems);
+  // Method B: element-wise posit->f32 decode is independent per element (no shared
+  // state). GPT-2 calls this very often on large tensors (f32<->posit bridge), so
+  // it is a hot path. Bit-identical; threads from POSIT_OMP_THREADS.
+#pragma omp parallel for num_threads(positOmpThreadCount()) schedule(static)
   for (int64_t i = 0; i < n; ++i) {
     auto bits = to_bits(in.data[in.offset + i]);
     out.data[out.offset + i] = static_cast<float>(decodeTensorValue<Fmt>(bits, inMeta));
@@ -5335,6 +5400,59 @@ static void relu_kernel(UnrankedMemRefType<typename Fmt::MemT> *In,
   registerTensorGPMetadata(tensorMetaPtr(out), outMeta);
 }
 
+// -------- decoded-weight f32 cache (optimization (c)) --------
+// Decoding posit->f32 is the dominant cost of the useF32Dot (POSIT_QOP_F32_MATH)
+// gemm path, and CONSTANT WEIGHTS get re-decoded every forward. Cache the decoded
+// f32 buffer keyed by data pointer. Safety: a content hash of the raw posit words
+// (cheap, ~2 instr/elem vs ~15 for decode) is verified on every lookup, so if a
+// pointer is reused for a different tensor (e.g. an activation whose content
+// changed) the hash mismatches and we re-decode -> never returns stale data.
+// Constant weights always match -> cache hit -> skip the expensive decode.
+// gemm_kernel calls are serial (the omp parallelism is inside a call), so the
+// lookup runs outside the parallel region and a single mutex suffices.
+struct DecodedF32Entry {
+  uint64_t hash = 0;
+  int64_t elems = -1;
+  std::vector<float> f32;
+};
+static std::unordered_map<const void *, DecodedF32Entry> gDecodedF32Cache;
+static std::mutex gDecodedF32CacheMutex;
+
+static inline bool positWeightCacheEnabled() {
+  static int e = -1;
+  if (e >= 0)
+    return e == 1;
+  const char *v = std::getenv("POSIT_WEIGHT_CACHE");
+  e = (v && (std::string(v) == "0" || std::string(v) == "off" ||
+             std::string(v) == "false"))
+          ? 0
+          : 1;  // default ON
+  return e == 1;
+}
+
+template <typename Fmt>
+static const float *getDecodedF32(const typename Fmt::MemT *data, int64_t offset,
+                                  int64_t elems) {
+  uint64_t h = 1469598103934665603ULL;  // FNV-1a over raw posit words
+  for (int64_t t = 0; t < elems; ++t) {
+    h ^= static_cast<uint64_t>(to_bits(data[offset + t]));
+    h *= 1099511628211ULL;
+  }
+  const void *key = static_cast<const void *>(data + offset);
+  std::lock_guard<std::mutex> lock(gDecodedF32CacheMutex);
+  DecodedF32Entry &e = gDecodedF32Cache[key];
+  if (e.elems == elems && e.hash == h &&
+      static_cast<int64_t>(e.f32.size()) == elems)
+    return e.f32.data();  // hit
+  e.hash = h;
+  e.elems = elems;
+  e.f32.resize(static_cast<size_t>(elems));
+  for (int64_t t = 0; t < elems; ++t)
+    e.f32[static_cast<size_t>(t)] =
+        static_cast<float>(Fmt::toDouble(Fmt::fromRaw(data[offset + t])));
+  return e.f32.data();
+}
+
 template <typename Fmt>
 static void gemm_kernel(UnrankedMemRefType<typename Fmt::MemT> *A,
                         UnrankedMemRefType<typename Fmt::MemT> *B,
@@ -5401,6 +5519,125 @@ static void gemm_kernel(UnrankedMemRefType<typename Fmt::MemT> *A,
       dumpMemRefDesc("gemm.C", c);
     zeroY();
     return;
+  }
+
+  // Batched matmul: A[...,M,K] x B[...,K,N] -> Y[...,M,N] with matching leading
+  // (batch) dims. Covers GPT-2 attention (rank-4 [B,H,M,K] x [B,H,K,N], alpha=1,
+  // beta=0, no bias). The 2D / 3D-im2col paths below do NOT handle rank>=3 batched
+  // matmul; without this it fell into the 2D path, mis-read dims and zeroY()'d ->
+  // every attention output was 0 -> GPT-2 logits collapsed (uniform ppl, any
+  // bit-width). Plain posit dot per (batch, i, j); no ALPS metadata on attention.
+  if (a.rank >= 3 && y.rank == a.rank && transA == 0 && transB == 0 &&
+      (b.rank == a.rank || b.rank == 2)) {
+    int64_t R = a.rank;
+    const bool sharedB = (b.rank == 2);  // B[K,N] shared over batch (e.g. lm_head)
+    int64_t M = a.sizes[R - 2], K = a.sizes[R - 1];
+    int64_t Kb = sharedB ? b.sizes[0] : b.sizes[R - 2];
+    int64_t N = sharedB ? b.sizes[1] : b.sizes[R - 1];
+    bool ok = (M >= 0 && K >= 0 && N >= 0 && K == Kb &&
+               y.sizes[R - 2] == M && y.sizes[R - 1] == N);
+    int64_t batch = 1;
+    for (int64_t d = 0; d < R - 2 && ok; ++d) {
+      if (a.sizes[d] != y.sizes[d])
+        ok = false;
+      else if (!sharedB && a.sizes[d] != b.sizes[d])
+        ok = false;
+      else
+        batch *= a.sizes[d];
+    }
+    if (ok) {
+      samples = makeQAlignOutputSampleBuffer(qalignKey, batch * M * N);
+      const bool useF32Dot = positQopF32MathEnabled() &&
+                             positQopF32MathOpEnabled(PositDotOpKind::Gemm);
+      {
+        bool quireForProbe = (!useMetaPath) && (!useF32Dot) &&
+                             dotAccumulatorWouldUseQuire<Fmt>();
+        recordDotProbe<Fmt>("matmul_batched", qalignKey,
+            useF32Dot ? "f32" : (quireForProbe ? "quire" : "posit_acc"),
+            quireForProbe, useF32Dot, false, useMetaPath, batch, M, N, 0, K,
+            batch * M * N);
+      }
+      const double alphaD = static_cast<double>(alpha);
+      const double betaD = static_cast<double>(beta);
+      auto pAlpha = Fmt::fromDouble(alphaD);
+      int64_t cElems = 0;
+      double betaC = 0.0;  // beta * C, with C broadcast as a scalar (GPT-2: C=[1])
+      if (betaD != 0.0 && num_elems_safe(c, cElems) && cElems > 0)
+        betaC = betaD * Fmt::toDouble(Fmt::fromRaw(c.data[c.offset]));
+      const int64_t aSlice = M * K, bSlice = sharedB ? 0 : K * N, ySlice = M * N;
+      // Speedup (f32-math only): A is invariant over j, but the naive loop
+      // re-decodes each A element once per j (e.g. lm_head M=1,N=50257 decodes
+      // A[768] 50257x). Pre-decode A once (batch*M*K) into f32 and reuse -> ~2x
+      // fewer posit decodes for skinny matmuls, and the inner loop vectorizes.
+      // Bit-identical (same f32 fma order). B stays inline (no per-i redundancy
+      // for M=1; caching decoded weights across calls is a separate change).
+      std::vector<float> aF32;
+      const float *aF32p = nullptr;
+      if (useF32Dot) {
+        // Serial on purpose: A is small (batch*M*K, e.g. 768) and this runs once
+        // per gemm call; an omp region here would fork/join per call and dominate.
+        aF32.resize(static_cast<size_t>(batch * M * K));
+        for (int64_t t = 0; t < batch * M * K; ++t)
+          aF32[static_cast<size_t>(t)] = static_cast<float>(
+              Fmt::toDouble(Fmt::fromRaw(a.data[a.offset + t])));
+        aF32p = aF32.data();
+      }
+      // (c) decoded-weight cache: only for a shared 2D weight B (e.g. lm_head);
+      // attention's B is a per-slice activation (not cached). Decodes B once and
+      // reuses across forwards via content-hash; nullptr -> inline decode below.
+      const float *bF32c = (useF32Dot && sharedB && positWeightCacheEnabled())
+                               ? getDecodedF32<Fmt>(b.data, b.offset, K * N)
+                               : nullptr;
+      // Method B: parallelize independent output elements (batch,i,j). Each output
+      // is its own dot product -> bit-identical to serial; only when sample
+      // collection is off. ao/bo/yo computed inside so the 3 loops are perfectly
+      // nested for collapse(3). lm_head (batch=1,M=1,N=50257) parallelizes over N.
+#pragma omp parallel for collapse(3) if(!samples.enabled) num_threads(positOmpThreadCount()) schedule(static)
+      for (int64_t bi = 0; bi < batch; ++bi) {
+        for (int64_t i = 0; i < M; ++i) {
+          for (int64_t j = 0; j < N; ++j) {
+            const int64_t ao = a.offset + bi * aSlice;
+            const int64_t bo = b.offset + bi * bSlice;
+            const int64_t yo = y.offset + bi * ySlice;
+            typename Fmt::PositT acc;
+            if (useF32Dot) {
+              // POSIT_QOP_F32_MATH: decode posit->f32, accumulate the dot in f32,
+              // re-encode. Storage stays posit; only the MAC arithmetic is f32
+              // (mirrors the 2D/3D gemm f32 path so attention/lm_head are
+              // consistent with the linear layers under POSIT_QOP_F32_MATH=on).
+              float dotF = 0.0f;
+              const int64_t arow = (bi * M + i) * K;
+              for (int64_t k = 0; k < K; ++k) {
+                float bv = bF32c ? bF32c[k * N + j]
+                                 : static_cast<float>(Fmt::toDouble(
+                                       Fmt::fromRaw(b.data[bo + k * N + j])));
+                dotF = std::fma(aF32p[arow + k], bv, dotF);
+              }
+              acc = Fmt::fromDouble(static_cast<double>(dotF) * alphaD + betaC);
+            } else {
+              auto dot = dot_product_accumulate_safe<Fmt>(
+                  K,
+                  [&](int64_t k) { return Fmt::fromRaw(a.data[ao + i * K + k]); },
+                  [&](int64_t k) { return Fmt::fromRaw(b.data[bo + k * N + j]); });
+              acc = dot;
+              if (alphaD != 1.0) {
+                try { acc = Fmt::mul(acc, pAlpha); } catch (...) {}
+              }
+              if (betaC != 0.0)
+                acc = Fmt::add(acc, Fmt::fromDouble(betaC));
+            }
+            auto outBits = Fmt::toRaw(acc);
+            y.data[yo + i * N + j] = outBits;
+            int64_t lin = (bi * M + i) * N + j;
+            samples.maybeAppend(lin, -1, Fmt::toDouble(acc),
+                                double_from_bits_fmt<Fmt>(outBits));
+          }
+        }
+      }
+      samples.flush();
+      registerTensorGPMetadata(tensorMetaPtr(y), yMeta);
+      return;
+    }
   }
 
   // Conv-im2col style GEMM for ONNX MatMul lowering:
@@ -5549,6 +5786,13 @@ static void gemm_kernel(UnrankedMemRefType<typename Fmt::MemT> *A,
     auto pAlpha = Fmt::fromDouble(alphaD);
     auto pBeta = Fmt::fromDouble(betaD);
 
+    // Method B (intra-op parallelism): each output element (n,m,s) is an
+    // independent dot product, so we parallelize the output loops. Results are
+    // BIT-IDENTICAL to serial (we do not change the per-element accumulation
+    // order). Only enabled when sample collection is off (samples.maybeAppend
+    // is not thread-safe). Threads come from OMP_NUM_THREADS; if the .so was not
+    // compiled with -fopenmp the pragma is ignored and this stays serial.
+#pragma omp parallel for collapse(3) if(!samples.enabled) num_threads(positOmpThreadCount()) schedule(static)
     for (int64_t n = 0; n < N; ++n) {
       for (int64_t m = 0; m < M; ++m) {
         for (int64_t s = 0; s < S; ++s) {
@@ -5770,6 +6014,27 @@ static void gemm_kernel(UnrankedMemRefType<typename Fmt::MemT> *A,
   auto pAlpha = Fmt::fromDouble(alphaD);
   auto pBeta = Fmt::fromDouble(betaD);
 
+  // Speedup (f32-math only): pre-decode A once (M*K) instead of re-decoding each
+  // A element per j. Uses load2 so strides/transA are respected. Serial (small,
+  // once per call). Bit-identical.
+  std::vector<float> aF32g;
+  const float *aF32gp = nullptr;
+  if (useF32Dot) {
+    aF32g.resize(static_cast<size_t>(M) * static_cast<size_t>(K));
+    for (int64_t i = 0; i < M; ++i)
+      for (int64_t k = 0; k < K; ++k)
+        aF32g[static_cast<size_t>(i) * K + k] = static_cast<float>(Fmt::toDouble(
+            Fmt::fromRaw(transA ? load2(a, k, i) : load2(a, i, k))));
+    aF32gp = aF32g.data();
+  }
+  // (c) decoded-weight cache: B is the linear-layer weight (constant). Decode
+  // once, reuse across forwards (content-hash verified). nullptr -> inline decode.
+  const float *bF32cg = (useF32Dot && positWeightCacheEnabled())
+                            ? getDecodedF32<Fmt>(b.data, b.offset, K * N)
+                            : nullptr;
+  // Method B: parallelize independent output elements (i,j); bit-identical to
+  // serial; only when sample collection is off; needs -fopenmp + OMP_NUM_THREADS.
+#pragma omp parallel for collapse(2) if(!samples.enabled) num_threads(positOmpThreadCount()) schedule(static)
   for (int64_t i = 0; i < M; ++i) {
     for (int64_t j = 0; j < N; ++j) {
       int64_t idx2[2] = {i, j};
@@ -5778,11 +6043,12 @@ static void gemm_kernel(UnrankedMemRefType<typename Fmt::MemT> *A,
         try {
           float dotF = 0.0f;
           for (int64_t k = 0; k < K; ++k) {
-            float av = static_cast<float>(Fmt::toDouble(Fmt::fromRaw(
-                transA ? load2(a, k, i) : load2(a, i, k))));
-            float bv = static_cast<float>(Fmt::toDouble(Fmt::fromRaw(
-                transB ? load2(b, j, k) : load2(b, k, j))));
-            dotF = std::fma(av, bv, dotF);
+            float bv = bF32cg
+                           ? (transB ? bF32cg[static_cast<size_t>(j) * K + k]
+                                     : bF32cg[static_cast<size_t>(k) * N + j])
+                           : static_cast<float>(Fmt::toDouble(Fmt::fromRaw(
+                                 transB ? load2(b, j, k) : load2(b, k, j))));
+            dotF = std::fma(aF32gp[static_cast<size_t>(i) * K + k], bv, dotF);
           }
           float cF = static_cast<float>(Fmt::toDouble(Fmt::fromRaw(cbit)));
           float accF = std::fma(dotF, alpha, beta * cF);
@@ -5913,11 +6179,49 @@ static void conv2d_nchw_kernel(UnrankedMemRefType<typename Fmt::MemT> *X,
       makeQAlignOutputSampleBuffer(qalignKey, N * M * outH * outW);
   int64_t sampleLin = 0;
 
+  // Speedup (metadata/ALPS path): the input decode uses the per-tensor xMeta and
+  // the SAME input pixel x[n,ic,ih,iw] is otherwise re-decoded once per output
+  // channel (Mpg times; large for pointwise 1x1 convs). Pre-decode the whole
+  // input tensor ONCE here so each pixel is decoded a single time. Bit-identical
+  // to the per-pixel decode (same xMeta). Only for the metadata path.
+  const int64_t Cin = x.sizes[1];
+  std::vector<double> xDec;
+  const double *xDecp = nullptr;
+  if (useMetaPath) {
+    xDec.resize(static_cast<size_t>(N) * Cin * H * Wd);
+    for (int64_t n = 0; n < N; ++n)
+      for (int64_t ic = 0; ic < Cin; ++ic)
+        for (int64_t ih = 0; ih < H; ++ih)
+          for (int64_t iw = 0; iw < Wd; ++iw)
+            xDec[(((static_cast<size_t>(n) * Cin + ic) * H + ih) * Wd) + iw] =
+                decodeTensorValue<Fmt>(load4(x, n, ic, ih, iw), xMeta);
+    xDecp = xDec.data();
+  }
+
   for (int64_t n = 0; n < N; ++n) {
     for (int64_t gg = 0; gg < g; ++gg) {
       for (int64_t mm = 0; mm < Mpg; ++mm) {
         int64_t oc = gg * Mpg + mm;
         auto bias = Fmt::fromRaw(load1(b, oc));
+        // Speedup (metadata/ALPS path): this output channel's weight metadata
+        // (wMetaCh) depends only on oc, so pre-decode the whole Cpg*kH*kW kernel
+        // ONCE per oc instead of re-decoding every weight for every output pixel
+        // (the old inner loop re-decoded each weight outH*outW times; e.g. an
+        // early 112x112 conv decoded each weight ~12544x). Values are identical
+        // to the per-pixel decode. Only for the metadata path.
+        std::vector<double> wDoc;
+        const double *wDocp = nullptr;
+        if (useMetaPath) {
+          TensorGPMetadata wMetaChOc =
+              lookupTensorGPMetadataForChannel(wMetaPtr, oc, wMeta);
+          wDoc.resize(static_cast<size_t>(Cpg) * kH * kW);
+          for (int64_t cc = 0; cc < Cpg; ++cc)
+            for (int64_t kh = 0; kh < kH; ++kh)
+              for (int64_t kw = 0; kw < kW; ++kw)
+                wDoc[(static_cast<size_t>(cc) * kH + kh) * kW + kw] =
+                    decodeTensorValue<Fmt>(load4(w, oc, cc, kh, kw), wMetaChOc);
+          wDocp = wDoc.data();
+        }
         for (int64_t oh = 0; oh < outH; ++oh) {
           for (int64_t ow = 0; ow < outW; ++ow) {
             if (useMetaPath) {
@@ -5938,11 +6242,11 @@ static void conv2d_nchw_kernel(UnrankedMemRefType<typename Fmt::MemT> *X,
                       if (iw < 0 || iw >= Wd)
                         continue;
                       float xv = static_cast<float>(
-                          decodeTensorValue<Fmt>(load4(x, n, ic, ih, iw), xMeta));
-                      TensorGPMetadata wMetaCh =
-                          lookupTensorGPMetadataForChannel(wMetaPtr, oc, wMeta);
+                          xDecp[(((static_cast<size_t>(n) * Cin + ic) * H + ih) *
+                                 Wd) +
+                                iw]);
                       float wv = static_cast<float>(
-                          decodeTensorValue<Fmt>(load4(w, oc, cc, kh, kw), wMetaCh));
+                          wDocp[(static_cast<size_t>(cc) * kH + kh) * kW + kw]);
                       accV = static_cast<double>(std::fma(xv, wv, static_cast<float>(accV)));
                     }
                   }
@@ -5970,11 +6274,11 @@ static void conv2d_nchw_kernel(UnrankedMemRefType<typename Fmt::MemT> *X,
                       if (iw < 0 || iw >= Wd)
                         continue;
                       double xv =
-                          decodeTensorValue<Fmt>(load4(x, n, ic, ih, iw), xMeta);
-                      TensorGPMetadata wMetaCh =
-                          lookupTensorGPMetadataForChannel(wMetaPtr, oc, wMeta);
+                          xDecp[(((static_cast<size_t>(n) * Cin + ic) * H + ih) *
+                                 Wd) +
+                                iw];
                       double wv =
-                          decodeTensorValue<Fmt>(load4(w, oc, cc, kh, kw), wMetaCh);
+                          wDocp[(static_cast<size_t>(cc) * kH + kh) * kW + kw];
                       accD = std::fma(xv, wv, accD);
                     }
                   }

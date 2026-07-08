@@ -940,10 +940,25 @@ for fmt in "${formats[@]}"; do
   fi
   cat "${s123_log}" >> "${log}" || true
 
+  # Buffer deallocation: the hand-rolled onnx-mlir-opt pipeline (unlike the real
+  # onnx-mlir driver) previously omitted memory-freeing passes, so every
+  # memref.alloc in main_graph leaked. Harmless for CNNs (one forward per
+  # --jobs process, which then exits) but fatal for autoregressive GPT-2: each
+  # token's forward leaked all intermediates (incl. the ~154MB lm_head f32
+  # decode), exhausting RAM and OOM-killing the run around token ~200. These
+  # passes mirror the driver's addKrnlToLLVMPasses (CompilerPasses.cpp): the
+  # dealloc pipeline must run AFTER affine is lowered and krnl.region removed.
+  # Returned buffers (logits + KV present) are correctly kept (not freed).
   if ! "${onnx_mlir_opt_bin}" "${krnl_mlir}" \
     --mlir-disable-threading \
     --canonicalize \
     --convert-krnl-to-affine \
+    --convert-vector-to-scf \
+    --lower-affine \
+    --lower-krnl-region \
+    --buffer-loop-hoisting \
+    --buffer-deallocation-pipeline \
+    --optimize-allocation-liveness \
     --convert-krnl-to-llvm \
     --reconcile-unrealized-casts \
     "${s4_trace_opts[@]}" \
@@ -996,7 +1011,13 @@ for fmt in "${formats[@]}"; do
   fi
   echo "[build] runtime source for ${fmt}: ${posit_runtime_cpp}"
   runtime_obj="${out_dir}/.${model_name}-${fmt}.posit_runtime.o"
-  runtime_compile_args=(-std=c++20 -O3 -fPIC -c "${posit_runtime_cpp}" -o "${runtime_obj}")
+  # -fopenmp enables Method B (intra-op parallelism in posit conv/gemm + the
+  # f32<->posit bridge). The omp pragmas are guarded by num_threads(
+  # positOmpThreadCount()), which is 1 unless POSIT_OMP_THREADS>1, so default
+  # behavior is unchanged (serial). NOTE: this LLVM clang's "-fopenmp=libgomp"
+  # silently does NOT define _OPENMP (pragmas ignored); plain "-fopenmp" works and
+  # uses libomp (see omp_lib_dir at link time).
+  runtime_compile_args=(-std=c++20 -O3 -fPIC -fopenmp -c "${posit_runtime_cpp}" -o "${runtime_obj}")
   runtime_compile_args+=("${mlir_include_args[@]}")
   # Compile the posit runtime with hidden/default-pruned sections so format-
   # specific builds do not export or keep unrelated template instantiations.
@@ -1090,7 +1111,14 @@ for fmt in "${formats[@]}"; do
   fi
   cat "${s6_log}" >> "${log}" || true
 
-  cxx_args=(-std=c++20 -O3 -fPIC -shared "${ll}" "${runtime_obj}")
+  # libomp lives under the LLVM build tree (not on the default linker path).
+  # Derive it from clang's location: <...>/build/bin/clang++ -> <...>/build/
+  # runtimes/runtimes-bins/openmp/runtime/src.
+  omp_lib_dir="$(cd "$(dirname "${clangxx_bin}")/.." 2>/dev/null && pwd)/runtimes/runtimes-bins/openmp/runtime/src"
+  cxx_args=(-std=c++20 -O3 -fPIC -shared -fopenmp "${ll}" "${runtime_obj}")
+  if [[ -d "${omp_lib_dir}" ]]; then
+    cxx_args+=(-L"${omp_lib_dir}" "-Wl,-rpath,${omp_lib_dir}")
+  fi
   cxx_args+=("${mlir_include_args[@]}")
   cxx_args+=(-Wl,--gc-sections)
   if [[ "${backend}" == "universal" ]]; then
