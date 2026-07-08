@@ -492,3 +492,8 @@ bash /home/lai/onnx_mlir/onnx-mlir/src/bash/time_model11_dataset_parallel.sh
   2>&1 | tee /home/lai/onnx_mlir/ImageNet100/build_posit11_mobilenetv2_alps_sqnr_p8_v2/mobilenetv2_alps_sqnr_p8e2e0_offline_5000.log
 
 要的話複製這個 上面沒有反斜線：POSIT_QOP_F32_MATH=on POSIT_QOP_F32_MATH_OPS=conv2d,gemm  bash /home/lai/onnx_mlir/onnx-mlir/src/bash/time_model11_dataset_parallel.sh   --model-name imagenet100_mobilenetv2   --out-dir /home/lai/onnx_mlir/ImageNet100/build_posit11_mobilenetv2_alps_sqnr_p8_v2   --image-dir /home/lai/onnx_mlir/ImageNet100/imagenet100_hf/validation   --image-preprocess-script /home/lai/onnx_mlir/ImageNet100/preprocess_imagenet100_tensor.py   --shape 1x3x224x224   --suffixes nqdq-p8e0,nqdq-p8e2   --baseline none --qalign-auto off --qalign-mode off   --jobs 25 --limit 5000 --warmup 0 --iters 1 --no-benchmark --quire off   --output-alps-auto on   --output-alps-formats p8e0,p8e2   --output-alps-collect-limit 500   --output-alps-collect-jobs 25   --record-preds on --progress 100 --task-progress on   2>&1 | tee /home/lai/onnx_mlir/ImageNet100/build_posit11_mobilenetv2_alps_sqnr_p8_v2/mobilenetv2_alps_sqnr_p8e2e0_offline_5000.log
+
+
+跑之前先跑這兩行，路徑一樣要記得改： 
+cmake -G Ninja .. -DMLIR_DIR=/home/lai/mlir_toy/llvm-project/build/lib/cmake/mlir -DLLVM_DIR=/home/lai/mlir_toy/llvm-project/build/lib/cmake/llvm -DCMAKE_BUILD_TYPE=Release
+cmake --build /home/lai/onnx_mlir/onnx-mlir/build --target onnx-mlir-opt onnx-mlir -- -j4
