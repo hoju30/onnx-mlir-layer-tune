@@ -286,6 +286,149 @@ static bool universalEncodeRawDispatch(double x, unsigned nbits, unsigned es,
       return true;
     }
     break;
+  case 4:
+    switch (es) {
+    case 0:
+      rawOut = universalEncodeRaw<4, 0>(x);
+      return true;
+    case 1:
+      rawOut = universalEncodeRaw<4, 1>(x);
+      return true;
+    case 2:
+      rawOut = universalEncodeRaw<4, 2>(x);
+      return true;
+    }
+    break;
+  case 5:
+    switch (es) {
+    case 0:
+      rawOut = universalEncodeRaw<5, 0>(x);
+      return true;
+    case 1:
+      rawOut = universalEncodeRaw<5, 1>(x);
+      return true;
+    case 2:
+      rawOut = universalEncodeRaw<5, 2>(x);
+      return true;
+    }
+    break;
+  case 6:
+    switch (es) {
+    case 0:
+      rawOut = universalEncodeRaw<6, 0>(x);
+      return true;
+    case 1:
+      rawOut = universalEncodeRaw<6, 1>(x);
+      return true;
+    case 2:
+      rawOut = universalEncodeRaw<6, 2>(x);
+      return true;
+    }
+    break;
+  case 7:
+    switch (es) {
+    case 0:
+      rawOut = universalEncodeRaw<7, 0>(x);
+      return true;
+    case 1:
+      rawOut = universalEncodeRaw<7, 1>(x);
+      return true;
+    case 2:
+      rawOut = universalEncodeRaw<7, 2>(x);
+      return true;
+    }
+    break;
+  case 9:
+    switch (es) {
+    case 0:
+      rawOut = universalEncodeRaw<9, 0>(x);
+      return true;
+    case 1:
+      rawOut = universalEncodeRaw<9, 1>(x);
+      return true;
+    case 2:
+      rawOut = universalEncodeRaw<9, 2>(x);
+      return true;
+    }
+    break;
+  case 10:
+    switch (es) {
+    case 0:
+      rawOut = universalEncodeRaw<10, 0>(x);
+      return true;
+    case 1:
+      rawOut = universalEncodeRaw<10, 1>(x);
+      return true;
+    case 2:
+      rawOut = universalEncodeRaw<10, 2>(x);
+      return true;
+    }
+    break;
+  case 11:
+    switch (es) {
+    case 0:
+      rawOut = universalEncodeRaw<11, 0>(x);
+      return true;
+    case 1:
+      rawOut = universalEncodeRaw<11, 1>(x);
+      return true;
+    case 2:
+      rawOut = universalEncodeRaw<11, 2>(x);
+      return true;
+    }
+    break;
+  case 12:
+    switch (es) {
+    case 0:
+      rawOut = universalEncodeRaw<12, 0>(x);
+      return true;
+    case 1:
+      rawOut = universalEncodeRaw<12, 1>(x);
+      return true;
+    case 2:
+      rawOut = universalEncodeRaw<12, 2>(x);
+      return true;
+    }
+    break;
+  case 13:
+    switch (es) {
+    case 0:
+      rawOut = universalEncodeRaw<13, 0>(x);
+      return true;
+    case 1:
+      rawOut = universalEncodeRaw<13, 1>(x);
+      return true;
+    case 2:
+      rawOut = universalEncodeRaw<13, 2>(x);
+      return true;
+    }
+    break;
+  case 14:
+    switch (es) {
+    case 0:
+      rawOut = universalEncodeRaw<14, 0>(x);
+      return true;
+    case 1:
+      rawOut = universalEncodeRaw<14, 1>(x);
+      return true;
+    case 2:
+      rawOut = universalEncodeRaw<14, 2>(x);
+      return true;
+    }
+    break;
+  case 15:
+    switch (es) {
+    case 0:
+      rawOut = universalEncodeRaw<15, 0>(x);
+      return true;
+    case 1:
+      rawOut = universalEncodeRaw<15, 1>(x);
+      return true;
+    case 2:
+      rawOut = universalEncodeRaw<15, 2>(x);
+      return true;
+    }
+    break;
   case 16:
     switch (es) {
     case 0:
@@ -341,6 +484,149 @@ static bool universalRoundToDoubleDispatch(double x, unsigned nbits, unsigned es
           std::integral_constant<unsigned, 1>{});
     case 2:
       return roundOne(std::integral_constant<unsigned, 8>{},
+          std::integral_constant<unsigned, 2>{});
+    }
+    break;
+  case 4:
+    switch (es) {
+    case 0:
+      return roundOne(std::integral_constant<unsigned, 4>{},
+          std::integral_constant<unsigned, 0>{});
+    case 1:
+      return roundOne(std::integral_constant<unsigned, 4>{},
+          std::integral_constant<unsigned, 1>{});
+    case 2:
+      return roundOne(std::integral_constant<unsigned, 4>{},
+          std::integral_constant<unsigned, 2>{});
+    }
+    break;
+  case 5:
+    switch (es) {
+    case 0:
+      return roundOne(std::integral_constant<unsigned, 5>{},
+          std::integral_constant<unsigned, 0>{});
+    case 1:
+      return roundOne(std::integral_constant<unsigned, 5>{},
+          std::integral_constant<unsigned, 1>{});
+    case 2:
+      return roundOne(std::integral_constant<unsigned, 5>{},
+          std::integral_constant<unsigned, 2>{});
+    }
+    break;
+  case 6:
+    switch (es) {
+    case 0:
+      return roundOne(std::integral_constant<unsigned, 6>{},
+          std::integral_constant<unsigned, 0>{});
+    case 1:
+      return roundOne(std::integral_constant<unsigned, 6>{},
+          std::integral_constant<unsigned, 1>{});
+    case 2:
+      return roundOne(std::integral_constant<unsigned, 6>{},
+          std::integral_constant<unsigned, 2>{});
+    }
+    break;
+  case 7:
+    switch (es) {
+    case 0:
+      return roundOne(std::integral_constant<unsigned, 7>{},
+          std::integral_constant<unsigned, 0>{});
+    case 1:
+      return roundOne(std::integral_constant<unsigned, 7>{},
+          std::integral_constant<unsigned, 1>{});
+    case 2:
+      return roundOne(std::integral_constant<unsigned, 7>{},
+          std::integral_constant<unsigned, 2>{});
+    }
+    break;
+  case 9:
+    switch (es) {
+    case 0:
+      return roundOne(std::integral_constant<unsigned, 9>{},
+          std::integral_constant<unsigned, 0>{});
+    case 1:
+      return roundOne(std::integral_constant<unsigned, 9>{},
+          std::integral_constant<unsigned, 1>{});
+    case 2:
+      return roundOne(std::integral_constant<unsigned, 9>{},
+          std::integral_constant<unsigned, 2>{});
+    }
+    break;
+  case 10:
+    switch (es) {
+    case 0:
+      return roundOne(std::integral_constant<unsigned, 10>{},
+          std::integral_constant<unsigned, 0>{});
+    case 1:
+      return roundOne(std::integral_constant<unsigned, 10>{},
+          std::integral_constant<unsigned, 1>{});
+    case 2:
+      return roundOne(std::integral_constant<unsigned, 10>{},
+          std::integral_constant<unsigned, 2>{});
+    }
+    break;
+  case 11:
+    switch (es) {
+    case 0:
+      return roundOne(std::integral_constant<unsigned, 11>{},
+          std::integral_constant<unsigned, 0>{});
+    case 1:
+      return roundOne(std::integral_constant<unsigned, 11>{},
+          std::integral_constant<unsigned, 1>{});
+    case 2:
+      return roundOne(std::integral_constant<unsigned, 11>{},
+          std::integral_constant<unsigned, 2>{});
+    }
+    break;
+  case 12:
+    switch (es) {
+    case 0:
+      return roundOne(std::integral_constant<unsigned, 12>{},
+          std::integral_constant<unsigned, 0>{});
+    case 1:
+      return roundOne(std::integral_constant<unsigned, 12>{},
+          std::integral_constant<unsigned, 1>{});
+    case 2:
+      return roundOne(std::integral_constant<unsigned, 12>{},
+          std::integral_constant<unsigned, 2>{});
+    }
+    break;
+  case 13:
+    switch (es) {
+    case 0:
+      return roundOne(std::integral_constant<unsigned, 13>{},
+          std::integral_constant<unsigned, 0>{});
+    case 1:
+      return roundOne(std::integral_constant<unsigned, 13>{},
+          std::integral_constant<unsigned, 1>{});
+    case 2:
+      return roundOne(std::integral_constant<unsigned, 13>{},
+          std::integral_constant<unsigned, 2>{});
+    }
+    break;
+  case 14:
+    switch (es) {
+    case 0:
+      return roundOne(std::integral_constant<unsigned, 14>{},
+          std::integral_constant<unsigned, 0>{});
+    case 1:
+      return roundOne(std::integral_constant<unsigned, 14>{},
+          std::integral_constant<unsigned, 1>{});
+    case 2:
+      return roundOne(std::integral_constant<unsigned, 14>{},
+          std::integral_constant<unsigned, 2>{});
+    }
+    break;
+  case 15:
+    switch (es) {
+    case 0:
+      return roundOne(std::integral_constant<unsigned, 15>{},
+          std::integral_constant<unsigned, 0>{});
+    case 1:
+      return roundOne(std::integral_constant<unsigned, 15>{},
+          std::integral_constant<unsigned, 1>{});
+    case 2:
+      return roundOne(std::integral_constant<unsigned, 15>{},
           std::integral_constant<unsigned, 2>{});
     }
     break;
@@ -957,14 +1243,24 @@ static double percentileAbsInPlace(SmallVectorImpl<double> &vals, double q) {
   return vals[idx];
 }
 
-static double meanAbsError(ArrayRef<double> a, ArrayRef<double> b) {
+// Weight ALPS scoring metric. NSR (noise-to-signal ratio) = sum((a-b)^2)/sum(a^2)
+// = 1/SQNR. Lower is better (keeps the existing minimize + minGain logic; maximize
+// SQNR == minimize NSR). Replaces the previous MAE = mean(|a-b|): NSR weights by
+// signal power (a^2) so the few large discriminative weights dominate the theta
+// choice instead of being averaged away by many small weights. Matches the runtime
+// metric (posit_runtime.cpp::runtimeOutputAlpsScoreForMeta).
+static double noiseToSignalRatio(ArrayRef<double> a, ArrayRef<double> b) {
   if (a.size() != b.size() || a.empty())
     return std::numeric_limits<double>::infinity();
-  long double acc = 0.0L;
-  for (size_t i = 0; i < a.size(); ++i)
-    acc += std::fabs(static_cast<long double>(a[i]) -
-                     static_cast<long double>(b[i]));
-  return static_cast<double>(acc / static_cast<long double>(a.size()));
+  long double errPow = 0.0L, sigPow = 0.0L;
+  for (size_t i = 0; i < a.size(); ++i) {
+    long double d = static_cast<long double>(a[i]) - static_cast<long double>(b[i]);
+    errPow += d * d;
+    sigPow += static_cast<long double>(a[i]) * static_cast<long double>(a[i]);
+  }
+  if (sigPow <= 0.0L)
+    return static_cast<double>(errPow);
+  return static_cast<double>(errPow / sigPow);
 }
 
 static std::optional<BuildTimeConstCompandDecision>
@@ -1112,7 +1408,7 @@ buildTimeWeightAlpsDecision(ArrayRef<double> vals, unsigned nbits,
                      << " gp_rs=" << cfg.rs << " gp_sc=" << cfg.sc << "\n";
       continue;
     }
-    double directScore = meanAbsError(scoreVals, directDecoded);
+    double directScore = noiseToSignalRatio(scoreVals, directDecoded);
     if (!cfg.enabled)
       best.directScore = directScore;
     maybeUpdateBestDirect(cfg, directScore);
@@ -1177,7 +1473,7 @@ buildTimeWeightAlpsDecision(ArrayRef<double> vals, unsigned nbits,
       }
       if (bad)
         continue;
-      double score = meanAbsError(scoreVals, localDecoded);
+      double score = noiseToSignalRatio(scoreVals, localDecoded);
       if (score + minGain < directScore && score < localBest.score) {
         localBest.valid = true;
         localBest.score = score;
@@ -1714,6 +2010,29 @@ static bool isTensorOfPosit(Type t) {
   return st && llvm::isa<mlir::posit::PositType>(st.getElementType());
 }
 
+// Cast a binary-op operand to a posit tensor that keeps the operand's OWN shape,
+// changing only the element type to posit. Broadcasting posit.add/sub/mul/div no
+// longer require identical operand/result types, so a scalar / lower-rank operand
+// (e.g. GPT-2 attention mask) must NOT be force-cast up to the result rank — that
+// created rank-changing unrealized casts (rank-0 -> rank-N) that broke posit->krnl.
+// If the operand is already a posit tensor, return it unchanged (preserve shape).
+static Value castOperandToPositKeepShape(ConversionPatternRewriter &rewriter,
+                                         Location loc, Value v, Type positElemTy) {
+  Type vt = v.getType();
+  if (isTensorOfPosit(vt))
+    return v;
+  Type tgt;
+  if (auto rtt = llvm::dyn_cast<RankedTensorType>(vt))
+    tgt = RankedTensorType::get(rtt.getShape(), positElemTy);
+  else if (llvm::isa<UnrankedTensorType>(vt))
+    tgt = UnrankedTensorType::get(positElemTy);
+  else
+    return v;
+  if (vt == tgt)
+    return v;
+  return rewriter.create<UnrealizedConversionCastOp>(loc, tgt, v).getResult(0);
+}
+
 // ------------- ONNXAddOp -> posit.add -------------
 
 // [FIX] Forward declaration: ONNXAddOpLowering uses this helper before its definition.
@@ -1796,12 +2115,9 @@ struct ONNXAddOpLowering : public OpConversionPattern<mlir::ONNXAddOp> {
         rhs = bc;
     }
 
-    if (lhs.getType() != addTy)
-      lhs =
-          rewriter.create<UnrealizedConversionCastOp>(loc, addTy, lhs).getResult(0);
-    if (rhs.getType() != addTy)
-      rhs =
-          rewriter.create<UnrealizedConversionCastOp>(loc, addTy, rhs).getResult(0);
+    Type addElemTy = llvm::cast<ShapedType>(addTy).getElementType();
+    lhs = castOperandToPositKeepShape(rewriter, loc, lhs, addElemTy);
+    rhs = castOperandToPositKeepShape(rewriter, loc, rhs, addElemTy);
 
     auto addOp = rewriter.create<mlir::posit::AddOp>(loc, addTy, lhs, rhs);
     addOp->setAttr("qalign_key",
@@ -1847,12 +2163,9 @@ struct ONNXSubOpLowering : public OpConversionPattern<mlir::ONNXSubOp> {
       else if (auto rhsRtt = llvm::dyn_cast<RankedTensorType>(rhs.getType()))
         binTy = rhsRtt;
     }
-    if (lhs.getType() != binTy)
-      lhs =
-          rewriter.create<UnrealizedConversionCastOp>(loc, binTy, lhs).getResult(0);
-    if (rhs.getType() != binTy)
-      rhs =
-          rewriter.create<UnrealizedConversionCastOp>(loc, binTy, rhs).getResult(0);
+    Type binElemTy = llvm::cast<ShapedType>(binTy).getElementType();
+    lhs = castOperandToPositKeepShape(rewriter, loc, lhs, binElemTy);
+    rhs = castOperandToPositKeepShape(rewriter, loc, rhs, binElemTy);
 
     auto subOp = rewriter.create<mlir::posit::SubOp>(loc, binTy, lhs, rhs);
     subOp->setAttr("qalign_key",
@@ -1892,12 +2205,9 @@ struct ONNXMulOpLowering : public OpConversionPattern<mlir::ONNXMulOp> {
       else if (auto rhsRtt = llvm::dyn_cast<RankedTensorType>(rhs.getType()))
         binTy = rhsRtt;
     }
-    if (lhs.getType() != binTy)
-      lhs =
-          rewriter.create<UnrealizedConversionCastOp>(loc, binTy, lhs).getResult(0);
-    if (rhs.getType() != binTy)
-      rhs =
-          rewriter.create<UnrealizedConversionCastOp>(loc, binTy, rhs).getResult(0);
+    Type binElemTy = llvm::cast<ShapedType>(binTy).getElementType();
+    lhs = castOperandToPositKeepShape(rewriter, loc, lhs, binElemTy);
+    rhs = castOperandToPositKeepShape(rewriter, loc, rhs, binElemTy);
 
     auto mulOp = rewriter.create<mlir::posit::MulOp>(loc, binTy, lhs, rhs);
     mulOp->setAttr("qalign_key",
@@ -1937,12 +2247,9 @@ struct ONNXDivOpLowering : public OpConversionPattern<mlir::ONNXDivOp> {
       else if (auto rhsRtt = llvm::dyn_cast<RankedTensorType>(rhs.getType()))
         binTy = rhsRtt;
     }
-    if (lhs.getType() != binTy)
-      lhs =
-          rewriter.create<UnrealizedConversionCastOp>(loc, binTy, lhs).getResult(0);
-    if (rhs.getType() != binTy)
-      rhs =
-          rewriter.create<UnrealizedConversionCastOp>(loc, binTy, rhs).getResult(0);
+    Type binElemTy = llvm::cast<ShapedType>(binTy).getElementType();
+    lhs = castOperandToPositKeepShape(rewriter, loc, lhs, binElemTy);
+    rhs = castOperandToPositKeepShape(rewriter, loc, rhs, binElemTy);
 
     auto divOp = rewriter.create<mlir::posit::DivOp>(loc, binTy, lhs, rhs);
     divOp->setAttr("qalign_key",

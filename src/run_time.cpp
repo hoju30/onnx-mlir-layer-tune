@@ -80,6 +80,24 @@ enum class OutType {
   P9E1,
   P9E2,
   P9E3,
+  P10E0,
+  P10E1,
+  P10E2,
+  P11E0,
+  P11E1,
+  P11E2,
+  P12E0,
+  P12E1,
+  P12E2,
+  P13E0,
+  P13E1,
+  P13E2,
+  P14E0,
+  P14E1,
+  P14E2,
+  P15E0,
+  P15E1,
+  P15E2,
   P16E0,
   P16E1,
   P16E2,
@@ -334,6 +352,42 @@ static bool tryParseOutType(const std::string &s, OutType &out) {
     out = OutType::P9E2;
   else if (s == "p9e3")
     out = OutType::P9E3;
+  else if (s == "p10e0")
+    out = OutType::P10E0;
+  else if (s == "p10e1")
+    out = OutType::P10E1;
+  else if (s == "p10e2")
+    out = OutType::P10E2;
+  else if (s == "p11e0")
+    out = OutType::P11E0;
+  else if (s == "p11e1")
+    out = OutType::P11E1;
+  else if (s == "p11e2")
+    out = OutType::P11E2;
+  else if (s == "p12e0")
+    out = OutType::P12E0;
+  else if (s == "p12e1")
+    out = OutType::P12E1;
+  else if (s == "p12e2")
+    out = OutType::P12E2;
+  else if (s == "p13e0")
+    out = OutType::P13E0;
+  else if (s == "p13e1")
+    out = OutType::P13E1;
+  else if (s == "p13e2")
+    out = OutType::P13E2;
+  else if (s == "p14e0")
+    out = OutType::P14E0;
+  else if (s == "p14e1")
+    out = OutType::P14E1;
+  else if (s == "p14e2")
+    out = OutType::P14E2;
+  else if (s == "p15e0")
+    out = OutType::P15E0;
+  else if (s == "p15e1")
+    out = OutType::P15E1;
+  else if (s == "p15e2")
+    out = OutType::P15E2;
   else if (s == "p16e0")
     out = OutType::P16E0;
   else if (s == "p16e1")
@@ -411,6 +465,42 @@ static const char *outTypeToString(OutType t) {
     return "p9e2";
   case OutType::P9E3:
     return "p9e3";
+  case OutType::P10E0:
+    return "p10e0";
+  case OutType::P10E1:
+    return "p10e1";
+  case OutType::P10E2:
+    return "p10e2";
+  case OutType::P11E0:
+    return "p11e0";
+  case OutType::P11E1:
+    return "p11e1";
+  case OutType::P11E2:
+    return "p11e2";
+  case OutType::P12E0:
+    return "p12e0";
+  case OutType::P12E1:
+    return "p12e1";
+  case OutType::P12E2:
+    return "p12e2";
+  case OutType::P13E0:
+    return "p13e0";
+  case OutType::P13E1:
+    return "p13e1";
+  case OutType::P13E2:
+    return "p13e2";
+  case OutType::P14E0:
+    return "p14e0";
+  case OutType::P14E1:
+    return "p14e1";
+  case OutType::P14E2:
+    return "p14e2";
+  case OutType::P15E0:
+    return "p15e0";
+  case OutType::P15E1:
+    return "p15e1";
+  case OutType::P15E2:
+    return "p15e2";
   case OutType::P16E0:
     return "p16e0";
   case OutType::P16E1:
@@ -666,6 +756,60 @@ static double p9e2_bits_to_double(int16_t bits) {
 static double p9e3_bits_to_double(int16_t bits) {
   return universal_bits_to_double<9, 3, int16_t, uint16_t>(bits);
 }
+static double p10e0_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<10, 0, int16_t, uint16_t>(bits);
+}
+static double p10e1_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<10, 1, int16_t, uint16_t>(bits);
+}
+static double p10e2_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<10, 2, int16_t, uint16_t>(bits);
+}
+static double p11e0_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<11, 0, int16_t, uint16_t>(bits);
+}
+static double p11e1_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<11, 1, int16_t, uint16_t>(bits);
+}
+static double p11e2_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<11, 2, int16_t, uint16_t>(bits);
+}
+static double p12e0_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<12, 0, int16_t, uint16_t>(bits);
+}
+static double p12e1_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<12, 1, int16_t, uint16_t>(bits);
+}
+static double p12e2_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<12, 2, int16_t, uint16_t>(bits);
+}
+static double p13e0_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<13, 0, int16_t, uint16_t>(bits);
+}
+static double p13e1_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<13, 1, int16_t, uint16_t>(bits);
+}
+static double p13e2_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<13, 2, int16_t, uint16_t>(bits);
+}
+static double p14e0_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<14, 0, int16_t, uint16_t>(bits);
+}
+static double p14e1_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<14, 1, int16_t, uint16_t>(bits);
+}
+static double p14e2_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<14, 2, int16_t, uint16_t>(bits);
+}
+static double p15e0_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<15, 0, int16_t, uint16_t>(bits);
+}
+static double p15e1_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<15, 1, int16_t, uint16_t>(bits);
+}
+static double p15e2_bits_to_double(int16_t bits) {
+  return universal_bits_to_double<15, 2, int16_t, uint16_t>(bits);
+}
 static double p16e0_bits_to_double(int16_t bits) {
   return universal_bits_to_double<16, 0, int16_t, uint16_t>(bits);
 }
@@ -740,6 +884,24 @@ static double p9e0_bits_to_double(int16_t) { return unsupported_extra_posit_bits
 static double p9e1_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
 static double p9e2_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
 static double p9e3_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p10e0_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p10e1_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p10e2_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p11e0_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p11e1_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p11e2_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p12e0_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p12e1_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p12e2_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p13e0_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p13e1_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p13e2_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p14e0_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p14e1_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p14e2_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p15e0_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p15e1_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
+static double p15e2_bits_to_double(int16_t) { return unsupported_extra_posit_bits_to_double(); }
 static double unsupported_posit_bits_to_double() {
   std::cerr << "p16e0/p32e0 require POSIT_USE_UNIVERSAL or POSIT_USE_UNIVERSAL_FALLBACK\n";
   std::exit(1);
@@ -1024,6 +1186,42 @@ static bool inferByOutType(void *sym, InDesc &in, bool doFree, OutType outType,
     return inferByType<int16_t>(sym, in, doFree, p9e2_bits_to_double, logitsOut);
   case OutType::P9E3:
     return inferByType<int16_t>(sym, in, doFree, p9e3_bits_to_double, logitsOut);
+  case OutType::P10E0:
+    return inferByType<int16_t>(sym, in, doFree, p10e0_bits_to_double, logitsOut);
+  case OutType::P10E1:
+    return inferByType<int16_t>(sym, in, doFree, p10e1_bits_to_double, logitsOut);
+  case OutType::P10E2:
+    return inferByType<int16_t>(sym, in, doFree, p10e2_bits_to_double, logitsOut);
+  case OutType::P11E0:
+    return inferByType<int16_t>(sym, in, doFree, p11e0_bits_to_double, logitsOut);
+  case OutType::P11E1:
+    return inferByType<int16_t>(sym, in, doFree, p11e1_bits_to_double, logitsOut);
+  case OutType::P11E2:
+    return inferByType<int16_t>(sym, in, doFree, p11e2_bits_to_double, logitsOut);
+  case OutType::P12E0:
+    return inferByType<int16_t>(sym, in, doFree, p12e0_bits_to_double, logitsOut);
+  case OutType::P12E1:
+    return inferByType<int16_t>(sym, in, doFree, p12e1_bits_to_double, logitsOut);
+  case OutType::P12E2:
+    return inferByType<int16_t>(sym, in, doFree, p12e2_bits_to_double, logitsOut);
+  case OutType::P13E0:
+    return inferByType<int16_t>(sym, in, doFree, p13e0_bits_to_double, logitsOut);
+  case OutType::P13E1:
+    return inferByType<int16_t>(sym, in, doFree, p13e1_bits_to_double, logitsOut);
+  case OutType::P13E2:
+    return inferByType<int16_t>(sym, in, doFree, p13e2_bits_to_double, logitsOut);
+  case OutType::P14E0:
+    return inferByType<int16_t>(sym, in, doFree, p14e0_bits_to_double, logitsOut);
+  case OutType::P14E1:
+    return inferByType<int16_t>(sym, in, doFree, p14e1_bits_to_double, logitsOut);
+  case OutType::P14E2:
+    return inferByType<int16_t>(sym, in, doFree, p14e2_bits_to_double, logitsOut);
+  case OutType::P15E0:
+    return inferByType<int16_t>(sym, in, doFree, p15e0_bits_to_double, logitsOut);
+  case OutType::P15E1:
+    return inferByType<int16_t>(sym, in, doFree, p15e1_bits_to_double, logitsOut);
+  case OutType::P15E2:
+    return inferByType<int16_t>(sym, in, doFree, p15e2_bits_to_double, logitsOut);
   case OutType::P16E0:
     return inferByType<int16_t>(sym, in, doFree, p16e0_bits_to_double, logitsOut);
   case OutType::P16E1:
@@ -1078,6 +1276,24 @@ static RunStats benchmarkByOutType(void *sym, InDesc &in, int64_t warmup, int64_
   case OutType::P9E1:
   case OutType::P9E2:
   case OutType::P9E3:
+  case OutType::P10E0:
+  case OutType::P10E1:
+  case OutType::P10E2:
+  case OutType::P11E0:
+  case OutType::P11E1:
+  case OutType::P11E2:
+  case OutType::P12E0:
+  case OutType::P12E1:
+  case OutType::P12E2:
+  case OutType::P13E0:
+  case OutType::P13E1:
+  case OutType::P13E2:
+  case OutType::P14E0:
+  case OutType::P14E1:
+  case OutType::P14E2:
+  case OutType::P15E0:
+  case OutType::P15E1:
+  case OutType::P15E2:
   case OutType::P16E0:
   case OutType::P16E1:
   case OutType::P16E2:

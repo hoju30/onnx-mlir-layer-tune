@@ -489,13 +489,28 @@ struct ConvertONNXToPositPass
       return false;
     };
 
+    // Only FLOAT-typed ops should be lowered to posit. Integer ops (i64 shape /
+    // index arithmetic in dynamic-shape models like GPT-2: Add/Sub/Mul/Reshape on
+    // tensor<i64>) must stay as ONNX -> Krnl integer ops; converting them to posit
+    // produces invalid memref<i64> -> posit-i8 casts. Returns true iff some result
+    // is a float-element shaped type.
+    auto opIsFloatTyped = [&](Operation *op) -> bool {
+      for (Type t : op->getResultTypes())
+        if (auto st = llvm::dyn_cast<ShapedType>(t))
+          if (llvm::isa<FloatType>(st.getElementType()))
+            return true;
+      return false;
+    };
+
     // Helper shared by all predicates below.
     // Format-map mode (POSIT_NODE_FORMATS set): only named ops convert to posit,
     //   all others stay fp32 regardless of --posit-format.
     // Selective mode (POSIT_SELECTIVE_NODES set): only named ops convert.
     // Normal mode (--posit-format only): whole-model posit via forceAllNumericOpsToPosit
-    //   / opNeedsPositConversion.
+    //   / opNeedsPositConversion. Non-float typed ops always stay ONNX.
     auto isLegal = [&](Operation *op) -> bool {
+      if (!opIsFloatTyped(op))
+        return true;
       if (!formatMap.empty())
         return !isFormatMapTarget(op);
       if (selectiveMode)

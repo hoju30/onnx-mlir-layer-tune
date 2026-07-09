@@ -854,18 +854,61 @@ struct PositBinaryOpLowering : public OpConversionPattern<OpT> {
     if (!outTy)
       return rewriter.notifyMatchFailure(op, "binary op expects memref result");
 
-    Value out = allocLikeValue(rewriter, loc, outTy, adaptor.getLhs());
-    if (!out)
-      return rewriter.notifyMatchFailure(op, "failed to allocate dynamic binary result");
+    Type positBitsTy = getPositStorageIntType(rewriter);
+    Value lhs = stripUnrealizedMemrefCast(adaptor.getLhs(), positBitsTy);
+    Value rhs = stripUnrealizedMemrefCast(adaptor.getRhs(), positBitsTy);
+
+    // For broadcasting (e.g. GPT-2 attention mask: scalar/lower-rank operand vs a
+    // full-rank tensor), the output shape must be derived from the operand whose
+    // REAL rank matches the result rank. An unrealized_conversion_cast can fake a
+    // rank-changing operand (rank-0 -> rank-N); using it for alloc emits memref.dim
+    // on a 0-ranked memref. Pick the genuinely rank-matching operand (lhs first).
+    // The runtime elementwise kernels handle the actual broadcast via
+    // offset_with_broadcast (incl. rank-0 scalars).
+    auto lhsRealTy = llvm::dyn_cast<MemRefType>(lhs.getType());
+    auto rhsRealTy = llvm::dyn_cast<MemRefType>(rhs.getType());
+
+    // Allocate the (possibly dynamic) broadcast result. For each dynamic output
+    // dim, pull its size from whichever operand actually covers that dim (NumPy
+    // trailing alignment) and is NOT broadcast (size != 1). A scalar / lower-rank
+    // operand (e.g. GPT-2 attention-mask constant) is skipped automatically, so we
+    // never emit memref.dim on a rank-0 memref<i8>.
+    Value out;
+    if (outTy.hasStaticShape()) {
+      out = rewriter.create<memref::AllocOp>(loc, outTy);
+    } else {
+      int64_t oRank = outTy.getRank();
+      auto dimFrom = [&](Value v, MemRefType ty, int64_t od) -> Value {
+        if (!ty || !ty.hasRank())
+          return Value();
+        int64_t md = od - (oRank - ty.getRank());
+        if (md < 0)
+          return Value();
+        if (ty.isDynamicDim(md))
+          return rewriter.create<memref::DimOp>(loc, v, md);
+        if (ty.getDimSize(md) == 1)
+          return Value();
+        return rewriter.create<arith::ConstantIndexOp>(loc, ty.getDimSize(md));
+      };
+      SmallVector<Value, 4> dynDims;
+      for (int64_t od = 0; od < oRank; ++od) {
+        if (!outTy.isDynamicDim(od))
+          continue;
+        Value d = dimFrom(lhs, lhsRealTy, od);
+        if (!d)
+          d = dimFrom(rhs, rhsRealTy, od);
+        if (!d)
+          return rewriter.notifyMatchFailure(
+              op, "failed to infer dynamic broadcast output dimension");
+        dynDims.push_back(d);
+      }
+      out = rewriter.create<memref::AllocOp>(loc, outTy, dynDims);
+    }
 
     auto unrankedI8 = getUnrankedPositBitsType(rewriter);
     int64_t qalignKey = 0;
     if (auto a = op->template getAttrOfType<IntegerAttr>("qalign_key"))
       qalignKey = getInt64Safe(a);
-
-    Type positBitsTy = getPositStorageIntType(rewriter);
-    Value lhs = stripUnrealizedMemrefCast(adaptor.getLhs(), positBitsTy);
-    Value rhs = stripUnrealizedMemrefCast(adaptor.getRhs(), positBitsTy);
     Value aU   = castToUnranked(rewriter, loc, lhs, unrankedI8);
     Value bU   = castToUnranked(rewriter, loc, rhs, unrankedI8);
     Value outU = castToUnranked(rewriter, loc, out, unrankedI8);
@@ -1234,6 +1277,22 @@ struct PositGemmOpLowering : public OpConversionPattern<posit::GemmOp> {
           } else if (od == 1) {
             dimVal = getDimOrConst(bPrepared, bTy, transB ? 0 : 1);
           }
+        } else if (outTy.getRank() >= 3 && aTy && bTy && aTy.hasRank() &&
+                   bTy.hasRank() && aTy.getRank() == outTy.getRank() &&
+                   bTy.getRank() == outTy.getRank()) {
+          // Batched matmul: out[batch..., M, N]. Leading (batch) dims from A;
+          // M from A's second-last dim (transA-aware), N from B's last dim
+          // (transB-aware). Without this, rank>=3 hit the fallback which copied
+          // A's dim -> wrong N (GPT-2 attention QK^T got [.,.,1,64] instead of
+          // [.,.,1,1]); the runtime gemm then saw an inconsistent output shape
+          // and zeroY'd -> attention all zeros -> logits collapse.
+          int64_t R = outTy.getRank();
+          if (od < R - 2)
+            dimVal = getDimOrConst(aPrepared, aTy, od);
+          else if (od == R - 2)
+            dimVal = getDimOrConst(aPrepared, aTy, transA ? R - 1 : R - 2);
+          else
+            dimVal = getDimOrConst(bPrepared, bTy, transB ? R - 2 : R - 1);
         }
 
         if (!dimVal) {
@@ -1472,6 +1531,13 @@ struct PositReshapeOpLowering : public OpConversionPattern<posit::ReshapeOp> {
         int64_t s = outTy.getDimSize(i);
         sizeVals[i] = cstIndex(s);
         sizes[i] = rewriter.getIndexAttr(s);
+        // BUGFIX: static output dims must also divide out of the inferred (-1)
+        // dim. Previously knownProd only accumulated dynamic dims, so e.g.
+        // reshape [1,1,768] -> [-1,768] computed inferredDim = total/1 = 768
+        // instead of total/768 = 1, making the seq dim = hidden dim and feeding
+        // every transformer gemm an [hidden,hidden] operand (nan/garbage output,
+        // mapped_range guard rejections). Include static dims in knownProd.
+        knownProd = rewriter.create<arith::MulIOp>(loc, knownProd, cstI64(s));
       }
     }
     Value inferredDim = rewriter.create<arith::DivSIOp>(loc, totalInputElems, knownProd);

@@ -1105,8 +1105,8 @@ if [[ "${output_alps_auto}" == "on" || -n "${output_alps_params_dir}" ]]; then
   for fmt in "${_output_alps_fmt_raw[@]}"; do
     fmt="${fmt//[[:space:]]/}"
     [[ -n "${fmt}" ]] || continue
-    if [[ ! "${fmt}" =~ ^p8e[0-2]$ ]]; then
-      echo "WARN: output-alps-auto currently supports p8e0/p8e1/p8e2 only, skip format=${fmt}"
+    if [[ ! "${fmt}" =~ ^p([4-9]|1[0-5])e[0-2]$ ]]; then
+      echo "WARN: output-alps-auto supports p4..p15 e0/e1/e2 only, skip format=${fmt}"
       continue
     fi
     for prefix in qdq nqdq; do

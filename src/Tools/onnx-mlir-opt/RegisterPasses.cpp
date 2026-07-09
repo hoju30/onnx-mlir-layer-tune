@@ -103,6 +103,8 @@ static bool isSupportedPositFormat(unsigned nbits, unsigned es) {
   // Extra low-bit experimental set requested by user flow.
   if ((nbits >= 4 && nbits <= 7) || nbits == 9)
     return es <= 3;
+  if (nbits >= 10 && nbits <= 15)
+    return es <= 2;
   return false;
 }
 

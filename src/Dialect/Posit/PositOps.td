@@ -33,35 +33,42 @@ def Posit_ConstantOp : Posit_Op<"constant", [Pure]> {
 // Elementwise math
 //===----------------------------------------------------------------------===//
 
-def Posit_AddOp : Posit_Op<"add", [Pure, SameOperandsAndResultType]> {
-  let summary = "add two posit values";
+// Add/Sub/Mul/Div allow NumPy-style broadcasting between operands (needed for
+// dynamic-shape models, e.g. GPT-2 attention mask: scalar/lower-rank vs tensor).
+// The trait was previously SameOperandsAndResultType, which forced onnx->posit to
+// insert rank-changing casts that broke posit->krnl. Operands keep their natural
+// ranks; the result carries the broadcast shape. The assembly format therefore
+// prints all operand types via functional-type. The runtime elementwise kernels
+// handle the broadcast (offset_with_broadcast, incl. rank-0 scalars).
+def Posit_AddOp : Posit_Op<"add", [Pure]> {
+  let summary = "add two posit values (broadcasting)";
   let arguments = (ins AnyType:$lhs, AnyType:$rhs);
   let results   = (outs AnyType:$result);
-  let assemblyFormat = "$lhs  `,` $rhs  attr-dict `:` type($result)";
+  let assemblyFormat = "$lhs  `,` $rhs  attr-dict `:` functional-type(operands, results)";
   let hasFolder = 0;
 }
 
-def Posit_SubOp : Posit_Op<"sub", [Pure, SameOperandsAndResultType]> {
-  let summary = "subtract two posit values";
+def Posit_SubOp : Posit_Op<"sub", [Pure]> {
+  let summary = "subtract two posit values (broadcasting)";
   let arguments = (ins AnyType:$lhs, AnyType:$rhs);
   let results   = (outs AnyType:$result);
-  let assemblyFormat = "$lhs  `,` $rhs  attr-dict `:` type($result)";
+  let assemblyFormat = "$lhs  `,` $rhs  attr-dict `:` functional-type(operands, results)";
   let hasFolder = 0;
 }
 
-def Posit_MulOp : Posit_Op<"mul", [Pure, SameOperandsAndResultType]> {
-  let summary = "multiply two posit values";
+def Posit_MulOp : Posit_Op<"mul", [Pure]> {
+  let summary = "multiply two posit values (broadcasting)";
   let arguments = (ins AnyType:$lhs, AnyType:$rhs);
   let results   = (outs AnyType:$result);
-  let assemblyFormat = "$lhs  `,` $rhs  attr-dict `:` type($result)";
+  let assemblyFormat = "$lhs  `,` $rhs  attr-dict `:` functional-type(operands, results)";
   let hasFolder = 0;
 }
 
-def Posit_DivOp : Posit_Op<"div", [Pure, SameOperandsAndResultType]> {
-  let summary = "divide two posit values";
+def Posit_DivOp : Posit_Op<"div", [Pure]> {
+  let summary = "divide two posit values (broadcasting)";
   let arguments = (ins AnyType:$lhs, AnyType:$rhs);
   let results   = (outs AnyType:$result);
-  let assemblyFormat = "$lhs  `,` $rhs  attr-dict `:` type($result)";
+  let assemblyFormat = "$lhs  `,` $rhs  attr-dict `:` functional-type(operands, results)";
   let hasFolder = 0;
 }
 

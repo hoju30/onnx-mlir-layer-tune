@@ -20,6 +20,7 @@
 #include <mlir/Dialect/Bufferization/Pipelines/Passes.h>
 #include <mlir/Dialect/Bufferization/Transforms/Passes.h>
 #include <mlir/Dialect/MemRef/Transforms/Passes.h>
+#include <mlir/Dialect/Tensor/IR/Tensor.h>
 #include <mlir/Dialect/Tosa/IR/TosaOps.h>
 #include <mlir/IR/AsmState.h>
 #include <mlir/IR/Dialect.h>
@@ -147,6 +148,7 @@ int main(int argc, char **argv) {
   registry.insert<tosa::TosaDialect,
   	mlir::posit::PositDialect,
         mlir::func::FuncDialect,
+        mlir::tensor::TensorDialect,
         mlir::arith::ArithDialect>();
   //new
   bufferization::registerBufferizationPipelines();

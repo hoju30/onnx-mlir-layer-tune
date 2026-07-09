@@ -87,7 +87,8 @@ env ONNX_MLIR_POSIT_FORCE_NQDQ=1 POSIT_COMPACT_CONSTANTS=1 \
   -o /tmp/mbv2.posit.mlir
 ```
 
-本實驗用的 ImageNet100 MobileNetV2 / ResNet18 模型（`imagenet100_mobilenetv2.onnx`、`imagenet100_resnet18.onnx` 及其 `-int8-qdq` 版本）**不在本 repo**，是從 HuggingFace ImageNet100 資料集訓練/匯出的，需另外取得；但上述 IR dump 流程對任何 ONNX 模型都適用。
+本實驗用的 ImageNet100 MobileNetV2 / ResNet18 模型（`imagenet100_mobilenetv2.onnx`、`imagenet100_resnet18.onnx` 及其 `-int8-qdq` 版本）與資料集 **不在本 repo**（資料集約 1.3GB、`.so` 單檔達 650MB，皆超過 GitHub 上限）。**完整重現流程**（HuggingFace 資料集下載 → f32 訓練 → ONNX 匯出 → int8 QDQ 量化 → build/評估）與所需腳本見
+[`experiments/imagenet100/README.md`](experiments/imagenet100/README.md)。上述 IR dump 流程對任何 ONNX 模型都適用。
 
 ### 0.4 只讓指定 layer 使用 posit（selective layer）
 
@@ -144,6 +145,9 @@ cmake --build build --target onnx-mlir-opt onnx-mlir -- -j4
 ---
 
 ## 3. 編譯成可執行 `.so` 並跑（需要模型 + 資料集）
+
+> 如何取得資料集與模型（下載 / f32 訓練 / ONNX 匯出 / int8 QDQ 量化）見
+> [`experiments/imagenet100/README.md`](experiments/imagenet100/README.md)。
 
 一鍵 build 各種 posit 格式的 `.so`（含 ALPS 等選項）：
 
