@@ -114,6 +114,16 @@ getOpFormat(Operation *op, const FormatMap &fmtMap,
   return {defNbits, defEs};
 }
 
+// Propagate the original ONNX node's identity onto the newly-created Posit
+// op so downstream tooling (e.g. the ML feature-extraction pipeline) can
+// still join a lowered Posit node back to its original ONNX node metadata,
+// per the "preserved node identity" design in claude.md section 6. Without
+// this, onnx_node_name is silently dropped during ONNX->Posit lowering.
+static void copyOnnxNodeName(Operation *srcOp, Operation *newOp) {
+  if (auto nm = srcOp->getAttrOfType<StringAttr>("onnx_node_name"))
+    newOp->setAttr("onnx_node_name", nm);
+}
+
 static Type makePositTensorType(Type srcTy, unsigned nbits, unsigned es,
                                 MLIRContext *ctx) {
   auto elem = posit::PositType::get(ctx, nbits, es);
@@ -2120,6 +2130,7 @@ struct ONNXAddOpLowering : public OpConversionPattern<mlir::ONNXAddOp> {
     rhs = castOperandToPositKeepShape(rewriter, loc, rhs, addElemTy);
 
     auto addOp = rewriter.create<mlir::posit::AddOp>(loc, addTy, lhs, rhs);
+    copyOnnxNodeName(op.getOperation(), addOp);
     addOp->setAttr("qalign_key",
         rewriter.getI64IntegerAttr(computeTensorQAlignKey(op)));
     Value addRes = addOp.getResult();
@@ -2168,6 +2179,7 @@ struct ONNXSubOpLowering : public OpConversionPattern<mlir::ONNXSubOp> {
     rhs = castOperandToPositKeepShape(rewriter, loc, rhs, binElemTy);
 
     auto subOp = rewriter.create<mlir::posit::SubOp>(loc, binTy, lhs, rhs);
+    copyOnnxNodeName(op.getOperation(), subOp);
     subOp->setAttr("qalign_key",
         rewriter.getI64IntegerAttr(computeTensorQAlignKey(op)));
     Value out = subOp.getResult();
@@ -2210,6 +2222,7 @@ struct ONNXMulOpLowering : public OpConversionPattern<mlir::ONNXMulOp> {
     rhs = castOperandToPositKeepShape(rewriter, loc, rhs, binElemTy);
 
     auto mulOp = rewriter.create<mlir::posit::MulOp>(loc, binTy, lhs, rhs);
+    copyOnnxNodeName(op.getOperation(), mulOp);
     mulOp->setAttr("qalign_key",
         rewriter.getI64IntegerAttr(computeTensorQAlignKey(op)));
     Value out = mulOp.getResult();
@@ -2252,6 +2265,7 @@ struct ONNXDivOpLowering : public OpConversionPattern<mlir::ONNXDivOp> {
     rhs = castOperandToPositKeepShape(rewriter, loc, rhs, binElemTy);
 
     auto divOp = rewriter.create<mlir::posit::DivOp>(loc, binTy, lhs, rhs);
+    copyOnnxNodeName(op.getOperation(), divOp);
     divOp->setAttr("qalign_key",
         rewriter.getI64IntegerAttr(computeTensorQAlignKey(op)));
     Value out = divOp.getResult();
@@ -3460,6 +3474,7 @@ struct ONNXReshapeOpLowering : public OpConversionPattern<mlir::ONNXReshapeOp> {
     st.addOperands({data, shape});
     st.addTypes({outTy});
     Operation *newOp = rewriter.create(st);
+    copyOnnxNodeName(op.getOperation(), newOp);
     rewriter.replaceOp(op, newOp->getResult(0));
     return success();
   }
@@ -3530,6 +3545,7 @@ struct ONNXUnsqueezeOpLowering : public OpConversionPattern<mlir::ONNXUnsqueezeO
     st.addOperands({data, shapeTensor});
     st.addTypes({outTy});
     Operation *newOp = rewriter.create(st);
+    copyOnnxNodeName(op.getOperation(), newOp);
     rewriter.replaceOp(op, newOp->getResult(0));
     return success();
   }
@@ -3552,6 +3568,7 @@ struct ONNXReluOpLowering : public OpConversionPattern<mlir::ONNXReluOp> {
     st.addAttribute("qalign_key",
         rewriter.getI64IntegerAttr(computeTensorQAlignKey(op)));
     Operation *newOp = rewriter.create(st);
+    copyOnnxNodeName(op.getOperation(), newOp);
     rewriter.replaceOp(op, newOp->getResult(0));
     return success();
   }
@@ -3599,6 +3616,7 @@ struct ONNXClipOpLowering : public OpConversionPattern<mlir::ONNXClipOp> {
         rewriter.getI64IntegerAttr(computeTensorQAlignKey(op)));
 
     Operation *newOp = rewriter.create(st);
+    copyOnnxNodeName(op.getOperation(), newOp);
     rewriter.replaceOp(op, newOp->getResult(0));
     return success();
   }
@@ -3632,6 +3650,7 @@ struct ONNXMaxPoolSingleOutOpLowering
         rewriter.getI64IntegerAttr(computeTensorQAlignKey(op)));
 
     Operation *newOp = rewriter.create(st);
+    copyOnnxNodeName(op.getOperation(), newOp);
     rewriter.replaceOp(op, newOp->getResult(0));
     return success();
   }
@@ -3652,6 +3671,7 @@ struct ONNXFlattenOpLowering : public OpConversionPattern<mlir::ONNXFlattenOp> {
     st.addTypes({outTy});
     st.addAttribute("axis", rewriter.getI64IntegerAttr(op.getAxis()));
     Operation *newOp = rewriter.create(st);
+    copyOnnxNodeName(op.getOperation(), newOp);
     rewriter.replaceOp(op, newOp->getResult(0));
     return success();
   }
@@ -3729,6 +3749,7 @@ struct ONNXConvOpLowering : public OpConversionPattern<mlir::ONNXConvOp> {
         rewriter.getI64IntegerAttr(computeTensorQAlignKey(op)));
 
     Operation *newOp = rewriter.create(st);
+    copyOnnxNodeName(op.getOperation(), newOp);
     rewriter.replaceOp(op, newOp->getResult(0));
     return success();
   }
@@ -3783,6 +3804,7 @@ struct ONNXMatMulOpLowering : public OpConversionPattern<mlir::ONNXMatMulOp> {
         rewriter.getI64IntegerAttr(computeTensorQAlignKey(op)));
 
     Operation *newOp = rewriter.create(st);
+    copyOnnxNodeName(op.getOperation(), newOp);
     rewriter.replaceOp(op, newOp->getResult(0));
     return success();
   }
@@ -3841,6 +3863,7 @@ struct ONNXGemmOpLowering : public OpConversionPattern<mlir::ONNXGemmOp> {
     st.addAttribute("qalign_key",
         rewriter.getI64IntegerAttr(computeTensorQAlignKey(op)));
     Operation *newOp = rewriter.create(st);
+    copyOnnxNodeName(op.getOperation(), newOp);
     rewriter.replaceOp(op, newOp->getResult(0));
     return success();
   }
@@ -3877,6 +3900,7 @@ struct ONNXReduceMeanV13OpLowering
     st.addAttribute("qalign_key",
         rewriter.getI64IntegerAttr(computeTensorQAlignKey(op)));
     Operation *newOp = rewriter.create(st);
+    copyOnnxNodeName(op.getOperation(), newOp);
     rewriter.replaceOp(op, newOp->getResult(0));
     return success();
   }

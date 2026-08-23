@@ -201,3 +201,11 @@ experiments/imagenet100/imagenet100_hf/
 experiments/imagenet100/imagenet100_*_out/
 experiments/imagenet100/model/
 experiments/imagenet100/val_224_txt/
+docs/mnist_example/dataset/
+docs/mnist_example/mnist_activation_stats.json
+docs/mnist_example/mnist_risk_calibration.json
+docs/mnist_example/mnist_whole_model_measurements.json
+docs/mobilenet_example/
+experiments/imagenet100/model_dataset/
+experiments/imagenet100/imagenet100_label_map.json
+experiments/imagenet100/resnet18_torchvision_v1_eval.json

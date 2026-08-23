@@ -14,7 +14,7 @@ Usage:
     [--allow-qdq-fallback-to-nqdq] \
     [--continue-on-posit-fail] \
     [--keep-stage-logs] [--no-stage-logs] \
-    [--skip-f32-baselines] \
+    [--skip-f32-baselines] [--skip-output-alps-calib-tool] \
     [--posit-source qdq|nqdq|both] [--posit-compact-constants] [--no-posit-compact-constants] \
     [--runtime-format-scope full|single] \
     [--runtime-qalign-mode full|alps-only] \
@@ -80,6 +80,7 @@ allow_qdq_fallback_to_nqdq=0
 align_to_int8_qdomain=0
 strict_qdq_mode=0
 skip_f32_baselines=0
+skip_output_alps_calib_tool=0
 keep_ir=0
 keep_stage_logs=0
 ir_dir_override=""
@@ -167,6 +168,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   --skip-f32-baselines)
     skip_f32_baselines=1
+    shift
+    ;;
+  --skip-output-alps-calib-tool)
+    skip_output_alps_calib_tool=1
     shift
     ;;
   --posit-source)
@@ -573,6 +578,7 @@ echo "[config] runtime_mixed_accum=${runtime_mixed_accum}"
 echo "[config] runtime_output_alps=${runtime_output_alps}"
 echo "[config] align_to_int8_qdomain=${align_to_int8_qdomain}"
 echo "[config] skip_f32_baselines=${skip_f32_baselines}"
+echo "[config] skip_output_alps_calib_tool=${skip_output_alps_calib_tool}"
 if [[ "${skip_f32_baselines}" -eq 0 ]]; then
   echo "[config] include_f32_baselines=qdq-f32,nqdq-f32"
 else
@@ -1199,47 +1205,51 @@ runner_sec="$(awk -v a="${runner_start_ns}" -v b="${runner_end_ns}" 'BEGIN{print
 build_time_sec_by_target["run_time_sp"]="${runner_sec}"
 echo "[build] done run_time_sp wall_time_sec=${runner_sec}"
 
-echo "[build] output-alps calibrate tool"
-calib_tool_start_ns="$(date +%s%N)"
-calib_tool="${out_dir}/output_alps_calibrate"
-calib_args=(-std=c++20 -O3 "${posit_runtime_cpp}" -o "${calib_tool}")
-calib_args+=("${mlir_include_args[@]}")
-calib_args+=(-DPOSIT_RUNTIME_OUTPUT_ALPS_CALIB_TOOL=1)
-calib_args+=(
-  "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_THETA_MIN=${ONNX_MLIR_POSIT_CONST_ALPS_THETA_MIN:-0.25}"
-  "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_THETA_MAX=${ONNX_MLIR_POSIT_CONST_ALPS_THETA_MAX:-4}"
-  "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_THETA_STEPS=${ONNX_MLIR_POSIT_CONST_ALPS_THETA_STEPS:-9}"
-  "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GAMMA_TARGET=${ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_TARGET:-1.0}"
-  "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GAMMA_PERCENTILE=${ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_PERCENTILE:-0.95}"
-  "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_MIN_GAIN=${ONNX_MLIR_POSIT_CONST_ALPS_MIN_GAIN:-0.0}"
-  "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_MAX_SAMPLES=${ONNX_MLIR_POSIT_CONST_ALPS_MAX_SAMPLES:-4096}"
-)
-append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_RS_VALUES_P8 "${POSIT_GP_RS_VALUES_P8:-}"
-append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_SC_VALUES_P8 "${POSIT_GP_SC_VALUES_P8:-}"
-append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_RS_VALUES_P8E0 "${POSIT_GP_RS_VALUES_P8E0:-}"
-append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_SC_VALUES_P8E0 "${POSIT_GP_SC_VALUES_P8E0:-}"
-append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_RS_VALUES_P8E1 "${POSIT_GP_RS_VALUES_P8E1:-}"
-append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_SC_VALUES_P8E1 "${POSIT_GP_SC_VALUES_P8E1:-}"
-append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_RS_VALUES_P8E2 "${POSIT_GP_RS_VALUES_P8E2:-}"
-append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_SC_VALUES_P8E2 "${POSIT_GP_SC_VALUES_P8E2:-}"
-if [[ "${backend}" == "universal" ]]; then
-  calib_args+=(-DPOSIT_USE_UNIVERSAL -I"${universal_inc}" -I/usr/local/include)
-else
-  softposit_rpath_dir="$(cd "$(dirname "${softposit_lib}")" && pwd)"
+if [[ "${skip_output_alps_calib_tool}" -eq 0 ]]; then
+  echo "[build] output-alps calibrate tool"
+  calib_tool_start_ns="$(date +%s%N)"
+  calib_tool="${out_dir}/output_alps_calibrate"
+  calib_args=(-std=c++20 -O3 "${posit_runtime_cpp}" -o "${calib_tool}")
+  calib_args+=("${mlir_include_args[@]}")
+  calib_args+=(-DPOSIT_RUNTIME_OUTPUT_ALPS_CALIB_TOOL=1)
   calib_args+=(
-    -DPOSIT_USE_SOFTPOSIT_PX1
-    -DPOSIT_USE_SOFTPOSIT_PX2
-    -I"${softposit_inc}"
-    -I/usr/local/include
-    "${softposit_lib}"
-    "-Wl,-rpath,${softposit_rpath_dir}"
+    "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_THETA_MIN=${ONNX_MLIR_POSIT_CONST_ALPS_THETA_MIN:-0.25}"
+    "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_THETA_MAX=${ONNX_MLIR_POSIT_CONST_ALPS_THETA_MAX:-4}"
+    "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_THETA_STEPS=${ONNX_MLIR_POSIT_CONST_ALPS_THETA_STEPS:-9}"
+    "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GAMMA_TARGET=${ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_TARGET:-1.0}"
+    "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GAMMA_PERCENTILE=${ONNX_MLIR_POSIT_CONST_ALPS_GAMMA_PERCENTILE:-0.95}"
+    "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_MIN_GAIN=${ONNX_MLIR_POSIT_CONST_ALPS_MIN_GAIN:-0.0}"
+    "-DPOSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_MAX_SAMPLES=${ONNX_MLIR_POSIT_CONST_ALPS_MAX_SAMPLES:-4096}"
   )
+  append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_RS_VALUES_P8 "${POSIT_GP_RS_VALUES_P8:-}"
+  append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_SC_VALUES_P8 "${POSIT_GP_SC_VALUES_P8:-}"
+  append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_RS_VALUES_P8E0 "${POSIT_GP_RS_VALUES_P8E0:-}"
+  append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_SC_VALUES_P8E0 "${POSIT_GP_SC_VALUES_P8E0:-}"
+  append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_RS_VALUES_P8E1 "${POSIT_GP_RS_VALUES_P8E1:-}"
+  append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_SC_VALUES_P8E1 "${POSIT_GP_SC_VALUES_P8E1:-}"
+  append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_RS_VALUES_P8E2 "${POSIT_GP_RS_VALUES_P8E2:-}"
+  append_runtime_string_define POSIT_RUNTIME_OUTPUT_ALPS_DEFAULT_GP_SC_VALUES_P8E2 "${POSIT_GP_SC_VALUES_P8E2:-}"
+  if [[ "${backend}" == "universal" ]]; then
+    calib_args+=(-DPOSIT_USE_UNIVERSAL -I"${universal_inc}" -I/usr/local/include)
+  else
+    softposit_rpath_dir="$(cd "$(dirname "${softposit_lib}")" && pwd)"
+    calib_args+=(
+      -DPOSIT_USE_SOFTPOSIT_PX1
+      -DPOSIT_USE_SOFTPOSIT_PX2
+      -I"${softposit_inc}"
+      -I/usr/local/include
+      "${softposit_lib}"
+      "-Wl,-rpath,${softposit_rpath_dir}"
+    )
+  fi
+  "${cxx_bin}" "${calib_args[@]}"
+  calib_tool_end_ns="$(date +%s%N)"
+  calib_tool_sec="$(awk -v a="${calib_tool_start_ns}" -v b="${calib_tool_end_ns}" 'BEGIN{print (b-a)/1e9}')"
+  build_time_sec_by_target["output_alps_calibrate"]="${calib_tool_sec}"
+  echo "[build] done output_alps_calibrate wall_time_sec=${calib_tool_sec}"
+else
+  echo "[build] output-alps calibrate tool: skipped (--skip-output-alps-calib-tool)"
 fi
-"${cxx_bin}" "${calib_args[@]}"
-calib_tool_end_ns="$(date +%s%N)"
-calib_tool_sec="$(awk -v a="${calib_tool_start_ns}" -v b="${calib_tool_end_ns}" 'BEGIN{print (b-a)/1e9}')"
-build_time_sec_by_target["output_alps_calibrate"]="${calib_tool_sec}"
-echo "[build] done output_alps_calibrate wall_time_sec=${calib_tool_sec}"
 
 if [[ "${skip_f32_baselines}" -eq 0 ]]; then
   echo "[build] qdq f32"
@@ -1282,7 +1292,11 @@ find "${out_dir}" -maxdepth 1 -type f -name '*.so' | sort
 echo "Runner:"
 echo "  ${out_dir}/run_time_sp"
 echo "Calibration tool:"
-echo "  ${out_dir}/output_alps_calibrate"
+if [[ "${skip_output_alps_calib_tool}" -eq 0 ]]; then
+  echo "  ${out_dir}/output_alps_calibrate"
+else
+  echo "  not built (--skip-output-alps-calib-tool)"
+fi
 if [[ "${keep_stage_logs}" -eq 1 ]]; then
   echo "Stage logs:"
   echo "  ${out_dir}/stage_logs"

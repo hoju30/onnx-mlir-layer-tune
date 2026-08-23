@@ -1,395 +1,290 @@
-# ML-Guided Mixed-Posit Precision Tuning on ONNX-MLIR
+ML-Guided Whole-Configuration Mixed-Posit Optimization on ONNX-MLIR
 
-## 1. Project Overview
-This project investigates an **ML-guided layer-wise / entity-wise posit precision tuning framework on ONNX-MLIR**.
+1. Project Overview
 
-Core goal:
-> Given a trained ONNX model and a user-defined error tolerance, select a posit format for each layer, op group, or computation entity while **minimizing total precision cost** and keeping whole-model output error or accuracy loss within tolerance.
+This project develops an ML-guided whole-configuration mixed-Posit optimization framework on ONNX-MLIR.Given a trained ONNX model, the framework assigns a numerical format to each supported ONNX operation or output tensor.A configuration may contain Posit8, Posit16, Posit32, and FP32 simultaneously.
 
-This is not whole-model single-format posit conversion. The goal is **mixed-posit assignment**:
-```text
-Conv_0   -> posit_16_1
-Relu_1   -> posit_8_2
-MatMul_2 -> posit_16_2
-Add_3    -> posit_8_1
+Conv_0    -> posit_16_1
+Relu_1    -> posit_8_1
+MatMul_2  -> posit_16_2
+Add_3     -> posit_8_0
 Softmax_4 -> FP32
-```
 
-Target formats: `posit_8_0`, `posit_8_1`, `posit_8_2`, `posit_16_0`, `posit_16_1`, `posit_16_2`, `posit_32_0`, `posit_32_1`, `posit_32_2`, and `FP32`.
+Candidate formats currently include posit_8_{0,1,2}, posit_16_{0,1,2}, posit_32_{0,1,2}, and FP32.The Posit backend is already implemented, and supported nodes can be assigned, lowered, compiled, and executed with different formats.The current research focuses on complete-configuration generation, graph-based accuracy-loss prediction, static cost analysis, Pareto selection, real evaluation, and iterative model updating.
 
-Core idea:
-1. Use an **FPLearner-style ML cost model** to predict promising layer-format candidates and reduce search space.
-2. Use a **TuneQn-style selective search / validation process** to find a layer-wise mixed-posit plan.
-3. Use a **cost-aware planner** so the final plan is not merely safe, but also lower-cost than FP32 / high-precision baselines.
-4. Apply the selected plan through **ONNX-MLIR annotation and later posit lowering passes**.
+2. Research Problem
 
-## 2. Research Problem and Objective
-The research should not be defined only as:
-```text
-Find any posit plan such that whole_model_error <= tolerance.
-```
+The number of possible mixed-precision configurations grows exponentially with the number of tunable nodes.Let (N) be the number of tunable nodes and (F_i) be the supported format set of node (i).(SearchSpace=\prod_{i=1}^{N}|F_i|)Exhaustively compiling and evaluating every configuration is impractical because real Posit execution is expensive.The framework therefore learns a surrogate model that predicts the whole-model accuracy loss of a complete mixed-Posit configuration.(\min_P\left(AccuracyLoss(P),WeightStorage(P),EstimatedPeakActivationMemory(P)\right))where (P) is a complete node-wise mixed-Posit configuration.(AccuracyLoss(P)=Accuracy_{FP32}-Accuracy_P)A deployment-stage tolerance (T) may additionally be imposed:(AccuracyLoss(P)\leq T)The framework searches for Pareto-optimal trade-offs instead of selecting only the safest or lowest-bit configuration.
 
-That formulation is too weak because a trivial high-precision plan, such as all FP32 or all posit32, can satisfy the tolerance without reducing cost.
+3. Research Objectives
 
-Instead, this project defines posit format selection as a **tolerance-constrained cost minimization problem**:
-```text
-minimize    total_precision_cost(plan)
-subject to  whole_model_error(plan) <= tolerance
-```
+The objectives are to represent ONNX-MLIR as a graph, encode complete Posit configurations, predict whole-model accuracy loss, calculate weight storage and peak activation memory, search Pareto configurations, validate them through real execution, update the predictor, and reduce tuning cost.
 
-A simple first version of total precision cost can be:
-```text
-total_precision_cost(plan) = Σ bit_width(format_i) × tensor_size_i
-```
+4. Overall Framework
 
-where `format_i` is the chosen format for layer/entity `i`, and `tensor_size_i` can be weight size, activation size, or weight + activation size.
+Configuration Generator
+          ↓
+Complete Mixed-Posit Configurations
+          ↓
+ ┌────────┴─────────┐
+ ↓                  ↓
+Accuracy Predictor  Cost Calculator
+GNN Regression      Static Analysis
+ ↓                  ↓
+Predicted            Weight Storage
+Accuracy Loss        Estimated Peak Activation Memory
+ └────────┬─────────┘
+          ↓
+     Pareto Selection
+          ↓
+  Selected Configurations
+          ↓
+   Real Posit Evaluator
+          ↓
+   True Accuracy Loss
+          ↓
+Dataset Update + Fine-tune
+          ↓
+ Updated Accuracy Predictor
 
-This makes the trade-off explicit:
-```text
-lower precision cost  <->  higher possible error risk
-higher precision cost <->  lower possible error risk
-```
+The Accuracy Predictor estimates the accuracy effect of a complete configuration.The Cost Calculator computes storage and memory costs without ML prediction.The Real Posit Evaluator remains the source of ground-truth accuracy.
 
-Therefore, the planner should search for the **lowest-cost feasible mixed-posit plan**, not simply the safest plan.
+5. Configuration Generator
 
-## 3. Research Direction
-Current direction:
-> Build an ONNX-MLIR-based framework that uses an ML cost model to predict promising posit formats for each layer/entity, keeps only Top-K candidates, and then performs cost-aware selective search to produce a mixed-posit precision plan.
+5.1 Initial Stage
 
-Main contribution targets:
-1. ONNX-MLIR-based layer/entity-wise posit precision tuning.
-2. ML-based Top-K layer-posit candidate selection.
-3. Cost-aware tolerance-constrained planning.
-4. TuneQn-style candidate evaluation with tolerance-based and Pareto-style analysis.
-5. Evaluation of whether ML-guided search reduces search space while preserving model accuracy and reducing precision cost.
+Before the predictor is available, the generator uses stratified random sampling plus manually designed representative configurations.Strata cover low-precision ratio; Posit8/16/32/FP32 proportions; front, middle, and back regions; operator distribution; weight and activation size; graph depth and branches; and average bit-width.Representative samples include all FP32; uniform Posit8/16/32; one low-precision region; front-only or back-only quantization; alternating formats; random mixtures; and sensitivity-guided configurations when available.Each sampled configuration is compiled and evaluated by the Real Posit Evaluator.The measured whole-model accuracy loss becomes the regression label.
 
-## 4. Why ONNX-MLIR?
-ONNX-MLIR lowering pipeline:
-```text
-ONNX model -> ONNX Dialect -> Krnl / SCF / Affine lowering -> LLVM IR -> Code generation
-```
+5.2 Predictor-Assisted Stage
 
-The **ONNX Dialect** stage preserves layer-level semantics, so posit decisions can be attached to high-level operations such as `onnx.Conv`, `onnx.Gemm`, `onnx.MatMul`, `onnx.Add`, `onnx.Relu`, and `onnx.Softmax`.
+After initial training, the generator changes to surrogate-assisted NSGA-II.NSGA-II generates complete configurations through population initialization, crossover, mutation, non-dominated sorting, and crowding-distance selection.The predictor estimates accuracy loss, while the Cost Calculator computes weight storage and peak activation memory.Only selected Pareto, uncertain, or underrepresented configurations are sent to real evaluation.
 
-After lowering to Krnl, SCF, or LLVM IR, one ONNX layer may become loops, memory operations, and arithmetic instructions. Therefore, the first posit selection / annotation should happen **before full lowering**.
+6. ONNX-MLIR Placement
 
-Recommended placement:
-```text
 ONNX model
-  -> ONNX Dialect
-  -> [Posit Selection / Annotation Pass]
-  -> Lower ONNX to Krnl / SCF
-  -> [Optional Posit Propagation / Refinement Pass]
-  -> Lower to LLVM
-```
+  -> ONNX Dialect + shape inference
+  -> identify supported ONNX nodes
+  -> cache high-level static metadata by onnx_node_name
+  -> Configuration Generator selects per-node formats
+  -> annotate selected ONNX nodes
+  -> selective ONNX-to-Posit lowering
+  -> Posit Dialect graph and feature extraction
+  -> Accuracy Predictor / Cost Calculator
+  -> Krnl / SCF / LLVM
+  -> executable mixed-Posit model
 
-## 5. Main Pipeline
-```text
-Original ONNX model
-  -> Import into ONNX-MLIR
-  -> ONNX Dialect
-  -> Layer / entity identification
-  -> Feature extraction
-  -> ML-based cost model
-  -> Top-K posit candidate selection
-  -> Reduced posit search space
-  -> Cost-aware planner / selective search
-  -> Validation / benchmarking
-  -> Tolerance-based selection + Pareto-style analysis
-  -> Layer-wise posit precision plan
-  -> ONNX-MLIR annotation pass
-  -> Optional type rewrite / posit lowering
-```
+The ONNX Dialect is the configuration-decision stage.The Configuration Generator uses stable ONNX node identities, such as onnx_node_name, to decide which nodes should be lowered to Posit and which Posit format each selected node should use.The Posit Dialect is the predictor graph-extraction stage.After applying a complete configuration, selected ONNX operations are lowered into Posit operations, and the resulting Posit-level SSA producer-consumer graph is extracted for the Accuracy Predictor.High-level information that may not be fully preserved after lowering, including original ONNX op type, shapes, attributes, FLOPs, and weight statistics, is cached at the ONNX stage and joined back to Posit nodes through the preserved node identity.LLVM IR is not used as the primary predictor input because one high-level operation may be expanded into many loops, loads, stores, and calls.
 
-## 6. ML-Based Cost Model
-The ML model is a **cost model / error-risk predictor**, not the final decision maker.
+7. Graph Construction
 
-Input features:
-- **Layer / structural:** layer type, op type, input/output shape, parameter count, FLOPs, graph depth, fan-in/fan-out, residual indicator, FP op count, arithmetic counts, memory access pattern.
-- **Runtime / profiling:** mean, std, min, max, abs max, p01, p50, p99, near-zero ratio, positive/negative ratio, outlier ratio, skewness, kurtosis, activation range, weight range.
-- **Posit metadata:** `nbits`, `es`, dynamic range, precision behavior, estimated bit cost, estimated runtime or hardware cost.
+7.1 Node Definition
 
-Possible outputs:
-```text
-f(layer_features, posit_format) -> predicted_relative_error
-f(layer_features, posit_format, tolerance) -> feasible / infeasible
-f(layer_features, posit_format) -> quantization_risk_score
-```
+Each operation in the Posit Dialect graph is represented as one graph node.A Posit node preserves or references the original ONNX node identity so that its high-level metadata and selected configuration can be recovered.For example, an ONNX node named Gemm_3 may be selectively lowered to a Posit Gemm operation carrying the same logical node ID and its selected N and ES.Constant weights and biases are initially incorporated into the owning operation's node features rather than represented as independent graph nodes.
 
-Initial recommendation: start with risk score or feasibility prediction, because exact error prediction is harder and can be affected by error propagation across layers.
+7.2 Dependency Definition
 
-## 7. Top-K Layer-Posit Candidate Selection
-For each layer/entity, the ML cost model predicts the risk, error, or feasibility of each posit format. Instead of allowing every format for every layer, only the **Top-K promising candidates** are kept.
+The primary dependency is the SSA tensor producer-consumer relation in the Posit Dialect.An edge is created when a Posit operation result is used as an operand of another operation.The graph is therefore an operation-level Posit data-flow graph, not a graph formed by connecting adjacent textual instructions.The graph topology reflects the applied complete configuration because the selected ONNX nodes have already been lowered into Posit operations.
 
-| Layer | Original Candidates | After Top-K |
-|---|---|---|
-| `Conv_0` | all posit formats + FP32 | `posit_16_1`, `posit_16_2`, `posit_32_0` |
-| `Relu_1` | all posit formats + FP32 | `posit_8_1`, `posit_8_2`, `posit_16_0` |
-| `MatMul_2` | all posit formats + FP32 | `posit_16_2`, `posit_32_0`, `posit_32_1` |
-| `Softmax_4` | all posit formats + FP32 | `posit_32_0`, `posit_32_1`, `FP32` |
+7.3 Forward and Reverse Edges
 
-Search-space comparison:
-```text
-Exhaustive search with 30 entities: 10^30
-Top-2 per entity: 2^30
-Top-3 per entity: 3^30
-```
+For each producer-consumer dependency, the graph contains one forward data-flow edge and one reverse message-passing edge.
 
-The ML model only decides **which posit formats are worth trying**. The final choice is made by the planner and validated by benchmarking.
+Gemm_3 -> Relu_4  forward
+Relu_4 -> Gemm_3  reverse
 
-## 8. Why Top-K Is Preferred
-**Method 3: Top-K Layer-Format Candidate Selection** is preferred because it is easier to implement, easier to explain, does not require the ML model to directly choose the final format, keeps validation / benchmarking as the final decision step, and makes search-space reduction clear and measurable.
+The reverse edge is not a real backward dependency or execution order.It only allows the GNN to propagate downstream context toward earlier nodes.
 
-**Method 4: ML-Guided Layer-Format Ordering** ranks transition actions, such as `Layer_3: posit_8_0 -> posit_16_0`. This is more complex because posit formats are not ordered only by bit-width. The `es` value changes dynamic range and precision distribution, so transition paths are not always obvious.
+7.4 Order Information
 
-Conclusion: use Top-K candidate selection as the main method. Treat ML-guided ordering as optional future work.
+The graph preserves topological_position, operand_index, and producer_output_index.topological_position represents normalized operation order.operand_index identifies which consumer input receives the tensor.producer_output_index identifies which producer output generates the tensor.
 
-## 9. Cost-Aware Search and Candidate Plan Generation
-After Top-K candidate selection, the reduced search space is passed to a cost-aware selective search process.
+8. Node Features
 
-Possible search methods:
-- Greedy search
-- Beam search
-- Sensitivity-based candidate generation
-- Pareto Front analysis
-- Tolerance-based filtering
+Node features are assembled from two sources.ONNX-stage metadata provides high-level structural and numerical information, while Posit-stage extraction provides the actual lowered operation, selected format, and Posit SSA graph context.The two records are joined using the preserved ONNX node identity.
 
-Planner objective:
-```text
-minimize    Σ cost(layer_i, format_i)
-subject to  estimated_whole_model_error(plan) <= tolerance
-```
+8.1 Static Structural Features
 
-A practical cost function:
-```text
-cost(layer_i, format_i) = bit_width(format_i) × tensor_size(layer_i)
-```
+The first version includes original op_type; input/output rank and log element counts; log weight count and FLOPs; kernel, stride, four-direction padding, dilation, group, log bias count; normalized topological position; in/out degree; and has_weight.Most of these values are collected or cached before selective lowering and then attached to the corresponding Posit graph node.Large count features use:(log_value=\log(1+value))
 
-Greedy plan generation:
-```text
-1. Start from a safe high-precision plan, such as FP32 or posit32.
-2. Use the ML cost model to predict risk/error for each layer-format pair.
-3. Keep only Top-K candidates for each layer/entity.
-4. For each possible replacement, compute cost_saved and error_increase.
-5. Rank replacements by cost_saved / error_increase.
-6. Try the best replacement.
-7. If accuracy loss is within tolerance, keep the replacement.
-8. If accuracy loss exceeds tolerance, rollback the replacement.
-9. Repeat until no valid lower-cost replacement can be applied.
-```
+8.2 Weight Statistics
 
-Cost-aware greedy score:
-```text
-score = cost_saved / (sensitivity_weighted_error_increase + epsilon)
-```
+Weight features are weight_mean, weight_std, weight_p99_abs, weight_zero_ratio, and weight_dynamic_range.Nodes without weights use zero-filled statistics and has_weight = 0.
 
-This avoids choosing high precision simply because it is safe. The planner is forced to look for lower-cost feasible replacements.
+8.3 Activation Statistics
 
-## 10. High-Precision Outcome Is Possible but Interpretable
-It is possible that the final tuned model still uses many high-precision formats, especially when:
-- The tolerance is very strict.
-- The model is sensitive to low-precision arithmetic.
-- The error predictor or error aggregation is conservative.
-- Some operations, such as MatMul, Conv, Softmax, or reductions, are numerically sensitive.
+Activation statistics are collected using a calibration subset.Activation features are activation_mean, activation_std, activation_p99_abs, activation_zero_ratio, and activation_dynamic_range.These values describe the FP32 activation distribution before applying a candidate configuration.
 
-This is not necessarily a failure. It may indicate that the model has limited low-precision opportunity under that tolerance.
+8.4 Posit Configuration Features
 
-Evaluation should therefore include:
-```text
-1. tolerance sweep, such as 1e-2, 1e-3, 1e-4, 1e-5
-2. percentage of posit8 / posit16 / posit32 / FP32 selected
-3. Pareto-style trade-off between error and precision cost
-4. comparison between predicted error and actual error
-```
+Each Posit graph node receives the format selected earlier for its original ONNX node.The selected configuration is applied during ONNX-to-Posit lowering, so N and ES are read from the resulting Posit operation or its type/attributes rather than inferred only from an external plan.The initial representation includes N, ES, and is_fp32.
 
-The purpose of mixed-precision tuning is not to force every layer into low precision. The goal is to automatically identify which layers can safely use low precision and which layers must remain high precision.
+FP32      -> is_fp32=1, N=32, ES=0
+Posit8E1  -> is_fp32=0, N=8,  ES=1
+Posit16E2 -> is_fp32=0, N=16, ES=2
 
-## 11. Precision Plan Format
-The ML cost model and planner should output a JSON file containing strategy, tolerance, candidate formats, cost, and per-entity decisions.
+A learned format embedding may be added when the candidate set is fixed.Keeping N and ES supports future experiments with previously unseen formats.
 
-```json
-{
-  "strategy": "cost_aware_top_k_posit_search",
-  "tolerance": 0.001,
-  "objective": "minimize_precision_cost_under_error_tolerance",
-  "formats": ["posit_8_0", "posit_8_1", "posit_8_2", "posit_16_0", "posit_16_1", "posit_16_2", "posit_32_0", "posit_32_1", "posit_32_2", "FP32"],
-  "entities": {
-    "Conv_0": {
-      "chosen": "posit_16_1",
-      "candidates": ["posit_16_1", "posit_16_2", "posit_32_0"],
-      "pred_error": 0.00042,
-      "risk_score": 0.18,
-      "precision_cost": 12582912
-    }
-  },
-  "estimated_whole_model_error": 0.00087,
-  "total_precision_cost": 216000000
-}
-```
+8.5 Optional Node-Format Features
 
-## 12. ONNX-MLIR Pass Structure
-### 12.1 ONNX-Level Posit Annotation Pass
-Runs on ONNX Dialect. It reads `precision_plan.json`, matches plan entries to ONNX operations, attaches posit attributes to ONNX ops, and starts with annotation-only mode.
+Optional node-format features are fake-quant normalized MSE and SQNR, underflow and zero-after-quantization ratios, and single-node accuracy or loss sensitivity.These values depend on both the node and the selected format.They are auxiliary features rather than whole-configuration labels.
 
-Example:
-```mlir
-%0 = "onnx.Conv"(%input, %weight, %bias) {
-  posit.chosen = "posit_16_1",
-  posit.candidates = ["posit_16_1", "posit_16_2", "posit_32_0"],
-  posit.pred_error = 0.00042,
-  posit.precision_cost = 12582912
-} : (...) -> tensor<...>
-```
+9. Edge Features
 
-### 12.2 Krnl / SCF-Level Posit Propagation Pass
-Runs after ONNX-to-Krnl lowering. It checks whether posit attributes survive lowering, propagates source layer information to generated loops or computation regions, and attaches `posit.source_layer` and `posit.chosen` to Krnl or SCF operations.
+The first edge vector includes direction, operand_index, producer_output_index, tensor rank, and log tensor elements; future versions may add residual, format-transition, tensor-statistics, alias/view, and lifetime features.A format-transition edge exists when producer output precision differs from consumer input precision.
 
-### 12.3 Future Type Rewrite / Posit Lowering Pass
-Later-stage work: rewrite selected floating-point operations to posit-aware operations, insert posit runtime or library calls, lower posit operations to LLVM-compatible code, and connect to a posit backend such as Stillwater Universal.
+10. Feature Encoding and Embedding
 
-Conceptual lowering:
-```text
-fadd -> posit_add
-fmul -> posit_mul
-matmul -> posit_matmul_kernel
-```
+10.1 Operation Embedding
 
-## 13. Posit Execution Method
-The final goal is to evaluate real posit execution inside the ONNX-MLIR compilation flow.
+op_type is categorical and is converted to an integer ID, then passed through a trainable embedding table.(e_{op}=Embedding(op_id))The operation ID is not directly treated as a continuous number.
 
-Execution flow:
-```text
-ONNX model -> ONNX-MLIR import -> ONNX Dialect -> Apply posit precision plan -> Lower to Krnl / SCF / LLVM -> Generate executable code -> Run validation and benchmarking
-```
+10.2 Format Encoding
 
-The selected posit operations can be lowered to posit-aware runtime or library calls. A possible backend is the Stillwater Universal posit library.
+Posit configuration is represented using normalized N, normalized ES, and is_fp32.An optional learned format embedding can be concatenated with these values.
 
-Measured outputs: real model output, accuracy, accuracy loss, precision cost, model size, runtime behavior, and latency if supported.
+10.3 Numerical Feature Processing
 
-## 14. Relation to TuneQn and FPLearner
-TuneQn is a conceptual reference for selective quantization, candidate generation, benchmarking, accuracy/model-size measurement, and Pareto Front selection.
+Count-based features first use logarithmic transformation.Continuous features are standardized using training-set statistics:(x'=\frac{x-\mu}{\sigma})The same normalization parameters are reused for validation and test models.
 
-| Aspect | TuneQn | This Project |
-|---|---|---|
-| Platform | ONNX + ONNX Runtime / TVM | ONNX-MLIR |
-| Format | INT quantization | Posit 8/16/32 with es=0/1/2 |
-| Unit | Layer | Layer / op group / entity |
-| Search reduction | Sensitivity ranking | ML-based Top-K candidate selection |
-| Final objective | Accuracy-size trade-off | Minimize precision cost under error tolerance |
-| Output | Quantized ONNX model | Posit plan + MLIR annotations |
-| Lowering | ONNX Quantizer | ONNX-MLIR pass / posit runtime |
+10.4 Node and Edge Vectors
 
-FPLearner provides the idea that ML can reduce precision-tuning search space:
-```text
-Do not exhaustively search all precision configurations.
-Use ML to identify promising precision candidates first.
-Then search only the reduced space.
-```
+The node vector is:(x_i=[e_{op}\Vert x_{static}\Vert x_{weight}\Vert x_{activation}\Vert x_{format}])The node vectors form:(X\in\mathbb{R}^{|V|\times D_n})The edge vector is:(e_{ij}=[e_{direction}\Vert operand_index\Vert output_index\Vert rank\Vert log_elements])The graph input contains X, edge_index, and edge_attr.
 
-Differences: this project targets ONNX / ONNX-MLIR, performs layer-wise or entity-wise posit precision tuning, and tunes posit formats rather than ordinary floating-point precision choices.
+11. Accuracy Predictor
 
-## 15. Experimental Evaluation Design
-The evaluation verifies:
-1. Whether the selected mixed-posit precision plan maintains acceptable model accuracy.
-2. Whether selected posit formats reduce precision cost, such as model size, average bit-width, or activation memory.
-3. Whether the ML-based cost model reduces the precision tuning search space compared with exhaustive or unguided search.
-4. Whether the final planner avoids trivial all-high-precision solutions when lower-cost feasible plans exist.
+The primary predictor is an edge-aware graph neural network.The first implementation may use GINE or another message-passing layer that accepts edge attributes.
 
-Evaluation models: MobileNet, ShuffleNet, EfficientNet, and ResNet.
+Node and edge vectors
+        ↓
+Edge-aware GNN layers
+        ↓
+Updated node embeddings
+        ↓
+Global mean pooling + global max pooling
+        ↓
+Graph/configuration embedding
+        ↓
+MLP regression head
+        ↓
+Predicted whole-model accuracy loss
 
-## 16. Baseline and Metrics
-Baseline:
-- Original FP32 ONNX model.
-- Optional all-posit32 model if posit32 execution is supported.
-- Optional random search and unguided greedy search.
+The same original ONNX model produces a different Posit Dialect graph sample when a different complete configuration is applied and selectively lowered.(f(G_{posit}(P),X_{onnx},X_{posit})\rightarrow\widehat{AccuracyLoss}(P))where (G_{posit}(P)) is the Posit Dialect graph produced by configuration (P), (X_{onnx}) contains cached high-level ONNX metadata, and (X_{posit}) contains lowered Posit operation and format features.The predictor does not estimate weight storage or peak activation memory.
 
-Main metrics:
-```text
-Accuracy = correct predictions / total predictions
-Accuracy Loss = FP32 Accuracy - Mixed-Posit Accuracy
-Weight Cost = number_of_weights × bit_width
-Activation Cost = number_of_activation_elements × bit_width
-Total Precision Cost = Weight Cost + Activation Cost
-Model Size Reduction = 1 - Mixed-Posit Model Size / FP32 Model Size
-Search Space Reduction Ratio = 1 - K^N / F^N
-```
+12. Regression Label and Training
 
-Also report:
-- Number of evaluated plans.
-- Number of accepted / rejected plans.
-- Search time if supported.
-- Distribution of selected formats: posit8, posit16, posit32, FP32.
+Each dataset sample corresponds to one complete configuration.
 
-## 17. Search Space Reduction Evaluation
-Assume:
-```text
-N = number of quantizable layers/entities
-F = number of original candidate formats per layer
-K = number of Top-K candidates kept per layer
-```
+Gemm_3 = posit_8_1
+Relu_4 = posit_16_1
+Gemm_5 = FP32
+label  = measured whole-model accuracy loss
 
-In this project:
-```text
-F = 10
-Original Search Space = F^N = 10^N
-Reduced Search Space = K^N
-Search Space Reduction Ratio = 1 - K^N / F^N
-```
+The label is:(y_P=Accuracy_{FP32}-Accuracy_P)The initial training objective may use mean squared error:(L_{MSE}=\frac{1}{M}\sum_{P=1}^{M}(\widehat{y}_P-y_P)^2)Mean absolute error and Huber loss may be compared.A ranking-aware loss may be considered later because configuration ordering matters for Pareto selection.
 
-Example with Top-3:
-```text
-Original Search Space = 10^N
-Reduced Search Space = 3^N
-Reduction Ratio = 1 - 3^N / 10^N
-```
+13. Cost Calculator
 
-## 18. Comparison Against Random Search
-To show that the cost model is useful, compare ML-guided Top-K search with random search under the same evaluation budget.
+The Cost Calculator performs static analysis for every complete configuration.It produces persistent weight storage and estimated peak live activation memory.No learned model is required for these objectives.
 
-Example:
-```text
-If ML-guided search evaluates 100 candidate plans,
-random search should also be limited to 100 candidate plans.
-```
+14. Persistent Weight Storage
 
-Compare best accuracy loss, best precision cost reduction, number of valid plans, and whether each method finds a plan within tolerance.
+(WeightStorage(P)=\sum_{w\in Weights}Elements(w)\times\frac{Bits_P(w)}{8})The calculation includes constant weights and biases when biases follow the assigned format.Shared initializers are counted only once.The precision of each weight tensor is determined by its owning operation or an explicit weight-format rule.The metric excludes executable code, Posit runtime libraries, external shared libraries, compiler metadata, and unmodeled alignment overhead.Compiled .so size may be reported as a secondary metric, but it is not equivalent to parameter storage.
 
-The proposed method is better if it finds a lower-cost valid plan than random search under the same number of evaluations.
+15. Estimated Peak Activation Memory
 
-## 19. Success Criteria
-The proposed search-space reduction method is considered effective if:
-1. The reduced search space is much smaller than the original exhaustive search space.
-2. The number of evaluated candidate plans is lower than exhaustive or unguided search.
-3. The final mixed-posit plan keeps accuracy loss within tolerance.
-4. The final mixed-posit plan reduces precision cost compared with the FP32 or all-high-precision baseline.
-5. The final plan is comparable to or better than random search under the same evaluation budget.
+For every activation tensor, record producer, consumers, shape, element count, assigned bit-width, creation step, last-use step, and alias relation.(TensorBytes(a)=Elements(a)\times\frac{Bits_P(a)}{8})A tensor becomes live after its producer creates it and remains live until its final consumer finishes using it.(LiveMemory(t)=\sum_{a\in Live(t)}TensorBytes(a))(EstimatedPeakActivationMemory(P)=\max_t LiveMemory(t))The first version uses a conservative model in which operation inputs remain live while outputs are allocated.View-like operations such as Reshape, Flatten, and Unsqueeze normally reuse the same buffer.Backend workspace, allocator fragmentation, and external-library temporary buffers are excluded unless statically available.
 
-Therefore, the ML cost model is not evaluated only by prediction accuracy. It is also evaluated by whether it can guide the planner to search fewer candidate plans while still finding a valid low-cost mixed-posit configuration.
+16. Initial Dataset Construction
 
-## 20. Current Implementation Plan
-### Stage 1: Annotation-Only Prototype
-Goal: generate a precision plan, insert ONNX-level posit annotations, and verify layer/entity mapping.
-Tasks: import ONNX model, identify ONNX operations/entities, extract features, run ML cost model, keep Top-K candidates, generate `precision_plan.json`, implement `PositAnnotationPass`, and confirm attributes are attached correctly.
+Each sample stores the model ID and ONNX graph; complete configuration; node and edge tensors; FP32 and Posit accuracy; measured accuracy loss; weight storage; estimated peak activation memory; and build/execution metadata.The initial sampling strategy combines stratified random configurations and representative configurations.Sampling should cover both high-accuracy and high-loss regions.Sampling only near FP32 may fail on aggressive configurations, while sampling only uniform formats may fail to learn interactions.The cache key should include model, complete configuration, compiler version, flags, dataset subset, and evaluation settings.
 
-### Stage 2: Propagation Through Lowering
-Goal: preserve or propagate posit annotations from ONNX ops to Krnl/SCF loops.
-Tasks: lower annotated ONNX Dialect to Krnl/SCF, track source layer/entity IDs, attach `posit.source_layer` and `posit.chosen`, and verify mapping correctness.
+17. Multi-Fidelity Data
 
-### Stage 3: Candidate Evaluation
-Goal: evaluate whether selected posit plans satisfy tolerance and reduce precision cost.
-Tasks: generate candidate plans from Top-K sets, execute or simulate posit behavior, compare output against FP64 or FP32 reference, measure error/cost/size/latency, and select the lowest-cost feasible plan.
+Real full-dataset Posit evaluation is the highest-fidelity label source.Lower-cost signals may include calibration-subset accuracy, fake-quant output error, calibration loss increase, logit divergence, and single-node sensitivity.These proxies do not replace the whole-model accuracy label.They may be added as features or used to prioritize expensive evaluations.
 
-### Stage 4: Posit Lowering
-Goal: actually execute selected posit operations.
-Tasks: define posit operation representation, rewrite selected operations or regions to posit-aware calls, connect to a posit runtime/library implementation, and validate correctness and performance.
+18. Surrogate-Assisted NSGA-II
 
-## 21. Final Summary
-This project builds an ONNX-MLIR-based ML-guided framework that predicts promising posit formats for each layer/entity, reduces the mixed-posit search space using Top-K candidate selection, and generates a layer-wise posit precision plan through cost-aware selective search.
+After initial predictor training, NSGA-II becomes the main generator.Each individual is a complete configuration vector:(P=[f_1,f_2,\ldots,f_N],\quad f_i\in F_i)For each individual:
 
-The central formulation is:
-```text
-minimize total_precision_cost(plan)
-subject to whole_model_error(plan) <= tolerance
-```
+Construct node-level configuration features.
 
-The final goal is to show that ML-guided Top-K search can reduce precision tuning search space while still finding a mixed-posit plan that satisfies accuracy tolerance and reduces precision cost.
+Predict whole-model accuracy loss.
+
+Calculate weight storage.
+
+Calculate estimated peak activation memory.
+
+Apply non-dominated sorting.
+
+Apply crossover and mutation.
+
+Generate the next population.Mutation changes one or more node formats.Crossover combines format regions from two configurations.Unsupported formats are masked, and FP32 remains available as a fallback.
+
+19. Pareto Selection
+
+The objectives are:(\min AccuracyLoss(P))(\min WeightStorage(P))(\min EstimatedPeakActivationMemory(P))A configuration is dominated when another configuration is no worse in every objective and strictly better in at least one objective.The system retains non-dominated configurations.When tolerance (T) is used, configurations above the predicted tolerance may be filtered or treated as constraint violations.Pareto diversity is preserved so that the final results expose multiple trade-offs.
+
+20. Real Posit Evaluator and Model Update
+
+Selected configuration
+  -> update ONNX node-format mapping
+  -> annotate selected ONNX nodes
+  -> selective ONNX-to-Posit lowering
+  -> extract Posit Dialect graph/features
+  -> compilation
+  -> validation execution
+  -> measured accuracy
+  -> true accuracy loss
+
+The evaluator records compilation status, execution status, accuracy, true loss, build time, evaluation time, and optional binary size.A predicted Pareto configuration is accepted only after real evaluation.Every newly evaluated configuration is added to the dataset.New evaluations should prioritize Pareto-front configurations, uncertain predictions, large errors, underrepresented formats, and configurations near tolerance.
+
+Predict -> select -> real evaluate -> add labels -> fine-tune -> predict again
+
+This forms a surrogate-assisted optimization and active-learning loop.
+
+21. Precision Plan Output
+
+precision_plan.json records the strategy, per-node formats, predicted and measured loss, weight storage, peak activation memory, Pareto rank, and validation status.
+
+22. Experimental Design
+
+Candidate model families include small CNN or MLP, ResNet, MobileNet, ShuffleNet, and EfficientNet.Selection criteria include ONNX-MLIR compatibility, Posit support, operator diversity, residual structure, depthwise convolution, activation diversity, and evaluation cost.Training and testing splits should be performed by complete models or model families.Recommended protocols include leave-one-model-out and leave-one-family-out.Normalization statistics must be fitted only on the training split.Within-model and cross-model results should be reported separately.
+
+23. Research Questions and Metrics
+
+RQ1 Accuracy-Loss Prediction: Can the graph predictor estimate whole-configuration loss? Metrics: MAE, RMSE, (R^2), and maximum absolute error.
+
+RQ2 Configuration Ranking: Can it rank configurations correctly? Metrics: Spearman correlation, Kendall's tau, and Top-K recall.
+
+RQ3 Search Efficiency: Does surrogate search reduce real evaluation? Metrics: configuration, compilation, and execution counts; tuning time; predictor inference time.
+
+RQ4 Pareto Quality: Does it find better trade-offs? Metrics: hypervolume, Pareto coverage, non-dominated count, and best feasible solution under each tolerance.
+
+RQ5 Weight Storage: Metrics: FP32 bytes, mixed-Posit bytes, reduction ratio, and weighted average weight bit-width.
+
+RQ6 Peak Activation Memory: Metrics: FP32 and mixed peak memory, reduction ratio, peak step, and live tensors at the peak.
+
+RQ7 Feature Contribution: Ablate configuration, static, weight-statistics, activation-statistics, edge, fake-quant, and single-node-sensitivity features.
+
+24. Baselines
+
+Required baselines are FP32; uniform Posit8/16/32; random and stratified random search; sensitivity-guided greedy search; NSGA-II without an accuracy predictor; and tabular whole-configuration regression.Optional baselines include single-node XGBoost prediction, exhaustive search on small models, GNN without edge attributes, and GNN without reverse edges.All search methods should be compared under equal real-evaluation budgets.
+
+25. Implementation Status and Plan
+
+Implemented components are Posit operation representation, external-library integration, Posit-aware lowering, node-level format assignment, mixed-Posit compilation/execution, and low-bit Posit8/16/32 storage.Remaining work is to preserve ONNX-to-Posit node mapping, construct the Posit graph and joined ONNX/Posit features; implement storage and liveness analysis; generate and evaluate initial configurations; train the GNN; integrate NSGA-II and Pareto search; update the predictor with real evaluations; and compare methods under equal budgets.
+
+26. Scope and Limitations
+
+Latency is not a primary objective in the first version because runtime may be dominated by software emulation, external calls, conversions, and non-vectorized kernels.Latency may be reported as a secondary implementation metric.Prediction quality depends on configuration diversity and label quantity.Activation statistics depend on the calibration dataset.Peak activation memory is a logical static estimate and may exclude backend workspace or allocator overhead.Reverse edges support GNN message passing but do not represent execution dependencies.Fake-quant error and single-node sensitivity are optional initial features.Cross-model generalization may require several model families.The full configuration space cannot be exhaustively evaluated for large models.
+
+27. Expected Contributions
+
+Expected contributions are a Posit Dialect operation graph linked to original ONNX node metadata, a configuration-aware GNN accuracy predictor, static storage and liveness calculators, surrogate-assisted NSGA-II, an iterative real-evaluation loop, and an empirical analysis of accuracy-storage-memory trade-offs.
+
+28. Success Criteria
+
+Success requires executable configurations, useful prediction and ranking quality, reduced storage and peak memory, acceptable real accuracy loss, fewer expensive evaluations, improved generalization over tabular baselines, and clear Pareto trade-offs.
+
+29. Final Summary
+
+(\min_P\left(AccuracyLoss(P),WeightStorage(P),EstimatedPeakActivationMemory(P)\right))The ML task is:(f(G_{posit}(P),X_{onnx},X_{posit})\rightarrow\widehat{AccuracyLoss}(P))The Configuration Generator operates on ONNX node identities and determines which ONNX nodes are selectively lowered to each Posit format.After applying the configuration, the graph is extracted from the Posit Dialect, where nodes represent lowered Posit operations and edges represent Posit SSA tensor producer-consumer dependencies.Cached ONNX metadata is joined to Posit nodes through the preserved node identity.Reverse edges are added only for bidirectional GNN message passing.The predictor uses structural, graph, weight-distribution, activation-distribution, and Posit-configuration features.Initial configurations are generated through stratified random sampling and representative configurations.After initial training, surrogate-assisted NSGA-II generates complete configurations.Weight storage and peak activation memory are calculated through static analysis.Selected Pareto configurations are compiled and executed by the real Posit backend.Measured results are added to the dataset and used to update the Accuracy Predictor.The final framework combines compiler IR graph representation, whole-configuration prediction, static cost analysis, multi-objective search, and real execution feedback.

@@ -56,6 +56,7 @@ extern "C" {
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -4598,6 +4599,76 @@ static bool positQuireEnabledForSmall() {
   return enabled == 1;
 }
 
+#if defined(POSIT_USE_UNIVERSAL)
+// Opt-in LUT-based exact accumulation for native 8-bit posit dot products
+// (FmtP8E0/E1/E2). posit<8,es> has only 256 distinct bit patterns, so all
+// 256*256 exact products can be precomputed once as double: double(posit8)
+// is bit-exact (<=5 fraction bits vs. double's 52-bit mantissa), and the
+// product of two such values needs <=11 significant bits, still far inside
+// double's precision. The hot loop then becomes one table lookup plus one
+// native double add, instead of Universal's generic quire_mul() bit-decode
+// (sign()/scale()/extract_fraction()) on every multiply-accumulate step.
+// Off by default: opt in with POSIT_LUT_P8=on until validated against the
+// existing quire path on real models (see runposittest.sh).
+static bool positLutEnabledForP8() {
+  static int enabled = -1;
+  if (enabled >= 0)
+    return enabled == 1;
+  const char *e = std::getenv("POSIT_LUT_P8");
+  if (!e || !*e) {
+    enabled = 0;
+    return false;
+  }
+  std::string s(e);
+  for (char &ch : s)
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  enabled = (s == "1" || s == "on" || s == "true" || s == "yes") ? 1 : 0;
+  return enabled == 1;
+}
+
+// Lazily-built, thread-safe (C++11 magic-statics) 256x256 exact-product
+// table for posit<8,ES>. NaR-involving cells are stored as +infinity, which
+// fdp() below turns into a thrown exception -- matching the existing
+// quire path's behavior, where a NaR operand makes quire_mul()'s inf
+// sentinel trip quire::operator+=()'s range check and throw. That exception
+// is caught by dot_product_accumulate_safe(), which falls back to the
+// manual per-element loop -- so LUT and quire share the exact same NaR
+// fallback behavior instead of silently diverging on it.
+template <int ES>
+static const std::array<std::array<double, 256>, 256> &positLutTableP8() {
+  static const std::array<std::array<double, 256>, 256> table = [] {
+    std::array<std::array<double, 256>, 256> t{};
+    using QPositT = sw::universal::posit<8, ES>;
+    for (unsigned ai = 0; ai < 256; ++ai) {
+      QPositT pa;
+      pa.setbits(ai);
+      const double da = pa.isnar() ? std::numeric_limits<double>::infinity()
+                                    : static_cast<double>(pa);
+      for (unsigned bi = 0; bi < 256; ++bi) {
+        QPositT pb;
+        pb.setbits(bi);
+        if (pa.isnar() || pb.isnar()) {
+          t[ai][bi] = std::numeric_limits<double>::infinity();
+          continue;
+        }
+        t[ai][bi] = da * static_cast<double>(pb);
+      }
+    }
+    return t;
+  }();
+  return table;
+}
+
+template <int ES, typename UIntT>
+static inline double positLutLookupP8(UIntT araw, UIntT braw) {
+  double v = positLutTableP8<ES>()[static_cast<unsigned char>(araw)]
+                                   [static_cast<unsigned char>(braw)];
+  if (!std::isfinite(v))
+    throw std::domain_error("posit8 LUT dot: NaR operand");
+  return v;
+}
+#endif // POSIT_USE_UNIVERSAL
+
 // Dot-product accumulator:
 // - default: plain posit accumulate (acc += a*b in posit domain)
 // - SoftPosit formats with quire: accumulate products in quire and convert once
@@ -4626,15 +4697,23 @@ struct DotAccumulator<FmtP8E0> {
   using PositT = typename FmtP8E0::PositT;
   using QuireT = sw::universal::quire<PositT, 20>;
   struct State {
+    bool useLut;
     bool useQuire;
     QuireT q;
     PositT acc;
+    double lutSum;
   };
   static inline State init() {
-    return State{positQuireEnabledForP8() && !positExperimentalGPEnabled<8, 0>(),
-                 QuireT(0), FmtP8E0::fromDouble(0.0)};
+    const bool gpOff = !positExperimentalGPEnabled<8, 0>();
+    const bool lut = positLutEnabledForP8() && gpOff;
+    const bool quire = !lut && positQuireEnabledForP8() && gpOff;
+    return State{lut, quire, QuireT(0), FmtP8E0::fromDouble(0.0), 0.0};
   }
   static inline void fdp(State &s, PositT a, PositT b) {
+    if (s.useLut) {
+      s.lutSum += positLutLookupP8<0>(FmtP8E0::toRaw(a), FmtP8E0::toRaw(b));
+      return;
+    }
     if (s.useQuire) {
       s.q += sw::universal::quire_mul(a, b);
       return;
@@ -4642,6 +4721,7 @@ struct DotAccumulator<FmtP8E0> {
     s.acc = FmtP8E0::add(s.acc, FmtP8E0::mul(a, b));
   }
   static inline PositT finish(const State &s) {
+    if (s.useLut) return FmtP8E0::fromDouble(s.lutSum);
     return s.useQuire ? finishUniversalQuire<PositT>(s.q) : s.acc;
   }
 };
@@ -4651,15 +4731,23 @@ struct DotAccumulator<FmtP8E1> {
   using PositT = typename FmtP8E1::PositT;
   using QuireT = sw::universal::quire<PositT, 20>;
   struct State {
+    bool useLut;
     bool useQuire;
     QuireT q;
     PositT acc;
+    double lutSum;
   };
   static inline State init() {
-    return State{positQuireEnabledForP8() && !positExperimentalGPEnabled<8, 1>(),
-                 QuireT(0), FmtP8E1::fromDouble(0.0)};
+    const bool gpOff = !positExperimentalGPEnabled<8, 1>();
+    const bool lut = positLutEnabledForP8() && gpOff;
+    const bool quire = !lut && positQuireEnabledForP8() && gpOff;
+    return State{lut, quire, QuireT(0), FmtP8E1::fromDouble(0.0), 0.0};
   }
   static inline void fdp(State &s, PositT a, PositT b) {
+    if (s.useLut) {
+      s.lutSum += positLutLookupP8<1>(FmtP8E1::toRaw(a), FmtP8E1::toRaw(b));
+      return;
+    }
     if (s.useQuire) {
       s.q += sw::universal::quire_mul(a, b);
       return;
@@ -4667,6 +4755,7 @@ struct DotAccumulator<FmtP8E1> {
     s.acc = FmtP8E1::add(s.acc, FmtP8E1::mul(a, b));
   }
   static inline PositT finish(const State &s) {
+    if (s.useLut) return FmtP8E1::fromDouble(s.lutSum);
     return s.useQuire ? finishUniversalQuire<PositT>(s.q) : s.acc;
   }
 };
@@ -4676,15 +4765,23 @@ struct DotAccumulator<FmtP8E2> {
   using PositT = typename FmtP8E2::PositT;
   using QuireT = sw::universal::quire<PositT, 20>;
   struct State {
+    bool useLut;
     bool useQuire;
     QuireT q;
     PositT acc;
+    double lutSum;
   };
   static inline State init() {
-    return State{positQuireEnabledForP8() && !positExperimentalGPEnabled<8, 2>(),
-                 QuireT(0), FmtP8E2::fromDouble(0.0)};
+    const bool gpOff = !positExperimentalGPEnabled<8, 2>();
+    const bool lut = positLutEnabledForP8() && gpOff;
+    const bool quire = !lut && positQuireEnabledForP8() && gpOff;
+    return State{lut, quire, QuireT(0), FmtP8E2::fromDouble(0.0), 0.0};
   }
   static inline void fdp(State &s, PositT a, PositT b) {
+    if (s.useLut) {
+      s.lutSum += positLutLookupP8<2>(FmtP8E2::toRaw(a), FmtP8E2::toRaw(b));
+      return;
+    }
     if (s.useQuire) {
       s.q += sw::universal::quire_mul(a, b);
       return;
@@ -4692,6 +4789,7 @@ struct DotAccumulator<FmtP8E2> {
     s.acc = FmtP8E2::add(s.acc, FmtP8E2::mul(a, b));
   }
   static inline PositT finish(const State &s) {
+    if (s.useLut) return FmtP8E2::fromDouble(s.lutSum);
     return s.useQuire ? finishUniversalQuire<PositT>(s.q) : s.acc;
   }
 };
