@@ -76,7 +76,18 @@ if (
         "version of expected onnx is {}, ".format(current_onnx_version)
         + "while onnx package being used is {}".format(onnx.__version__)
     )
-    quit()
+    # A bare `quit()` exits 0, which CMake's add_custom_command sees as
+    # success: the build silently keeps whatever ONNXOps.td.inc/
+    # OpBuildTable.inc already happen to be on disk (possibly stale, or
+    # missing on a fresh checkout) instead of failing loudly. Exit non-zero
+    # so a version mismatch is caught immediately instead of surfacing much
+    # later as a confusing "op not found"/wrong-schema failure.
+    print(
+        "Run utils/regen-onnx-ops.sh instead of this script directly to "
+        "install the pinned onnx version (from requirements.txt) in "
+        "isolation and regenerate -- see docs/BuildONNX.md."
+    )
+    sys.exit(1)
 
 # Record the version of each operation that is treated as the current version.
 # To check whether the onnx package being used has newer version operation,

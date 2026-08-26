@@ -12,6 +12,9 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
 
+#include "src/Dialect/ONNX/DialectBuilder.hpp"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -658,6 +661,303 @@ static bool retypeMatMulLikeToQuant(IRRewriter &rewriter, Operation *op,
   return true;
 }
 
+// Permute+flatten a [CO,C,KH,KW] f32 weight constant into [K,CO]
+// (K=KH*KW*C), matching the (kh outer, kw next, c innermost) flattening
+// order used by the runtime im2col unfold in retypeConvToFp8 below, and
+// quantizing to f8 in the same pass. W is always a compile-time constant
+// here, so this whole step -- which mirrors, in plain C++ over the
+// attribute data, the transposeInt64({2,3,1,0})+reshape done at *runtime*
+// for the activation side in src/Conversion/ONNXToKrnl/Math/QLinearConv.cpp
+// -- avoids needing any runtime Transpose/Reshape ops for the weight at
+// all.
+// `coStart`/`coCount` select a contiguous range of W's leading (CO) dim --
+// used to pull out one group's output-channel slice of a `group`-attribute
+// weight tensor shaped [CO, C/group, KH, KW] without needing a runtime Slice
+// (W is always a compile-time constant here, so this is plain C++ indexing
+// into the constant's flat data). group==1 callers just pass coStart=0,
+// coCount=CO, i.e. the whole tensor -- same code path either way.
+static DenseElementsAttr quantizeAndReshapeConvWeightToF8(
+    DenseElementsAttr wAttr, float wScale, Type f8Ty, int64_t coStart,
+    int64_t coCount, int64_t C, int64_t KH, int64_t KW) {
+  auto f8TensorTy = RankedTensorType::get({KH * KW * C, coCount}, f8Ty);
+  SmallVector<float, 64> in(
+      wAttr.getValues<float>().begin(), wAttr.getValues<float>().end());
+  SmallVector<Attribute, 64> out(KH * KW * C * coCount);
+  Builder b(f8Ty.getContext());
+  // in index (row-major [CO,C,KH,KW]): (((coStart+co)*C+c)*KH+kh)*KW+kw
+  // out index (row-major [K,coCount], K=(kh,kw,c) flattened): (kh*KW+kw)*C+c, *coCount+co
+  for (int64_t co = 0; co < coCount; ++co)
+    for (int64_t c = 0; c < C; ++c)
+      for (int64_t kh = 0; kh < KH; ++kh)
+        for (int64_t kw = 0; kw < KW; ++kw) {
+          int64_t inIdx = (((coStart + co) * C + c) * KH + kh) * KW + kw;
+          int64_t kIdx = (kh * KW + kw) * C + c;
+          int64_t outIdx = kIdx * coCount + co;
+          out[outIdx] = b.getFloatAttr(f8Ty, in[inIdx] / wScale);
+        }
+  return DenseElementsAttr::get(f8TensorTy, out);
+}
+
+// Rewrite a single onnx.Conv node into an im2col unfold (Slice/Concat/
+// Reshape/Transpose, quantizing X to f8 first) -> onnx.QLinearMatMul ->
+// dequantize-cast -> [+bias]. Unlike the int8 path (retypeConvToInt8,
+// which builds an onnx.QLinearConv and lets a dedicated Krnl lowering
+// pattern in src/Conversion/ONNXToKrnl/Math/QLinearConv.cpp do the im2col),
+// this does the im2col decomposition directly at the ONNX-graph level here:
+// onnx.QLinearConv has no opset version with float8-typed operands at all
+// (unlike QLinearMatMul, which got a real opset-21 upgrade -- see the
+// project plan), so it structurally cannot carry f8 X/W/Y, and there was no
+// way to reuse it for this case. The im2col formulas themselves (padding,
+// per-tap slicing, tap concatenation order) are the exact same ones already
+// validated in QLinearConv.cpp, just built here via OnnxBuilder directly on
+// ONNX-dialect tensors instead of inside a Krnl conversion pattern.
+//
+// Bias here is the *original* float32 onnx.Conv bias (not a pre-quantized
+// i32 value like QLinearConv's spec-mandated bias), so unlike
+// retypeConvToInt8 it's simply added in f32 after dequantization -- the
+// same "add C after dequant" pattern retypeMatMulLikeToQuant already uses
+// for Gemm's bias.
+//
+// Scope: 4D NCHW, auto_pad==NOTSET, static shapes, W a compile-time constant
+// -- the same restrictions as retypeConvToInt8 / QLinearConv.cpp, which come
+// from the im2col approach itself rather than from int8/fp8 specifically.
+// group>=1 (including depthwise) is supported, mirroring the restructuring
+// already validated for the int8 kernel in QLinearConv.cpp: X is
+// channel-sliced per group (runtime onnx.Slice, since X is only known at
+// im2col-unfold time), W is channel-sliced per group directly in C++ over
+// the constant attribute data (see quantizeAndReshapeConvWeightToF8's
+// coStart/coCount), and each group's QLinearMatMul+dequant result is
+// concatenated back along the CO axis before bias is added. Unlike the int8
+// kernel, w_scale/w_zero_point/y_scale/y_zero_point stay single per-tensor
+// scalars shared by every group (matching this function's pre-existing
+// group==1 design, which never supported per-channel scale/zero-point to
+// begin with), and bias -- being plain f32, not a pre-quantized i32 value --
+// is added exactly once, after the per-group results are concatenated,
+// rather than needing to be sliced and added per group before rescaling.
+static bool retypeConvToFp8(IRRewriter &rewriter, Operation *op,
+    ArrayRef<double> params, StringRef nodeName, Type f8ElemType) {
+  if (params.size() != 4) {
+    op->emitWarning() << "LOWP_NODE_FORMATS entry for '" << nodeName
+                       << "' needs exactly 4 params "
+                          "(x_scale:x_zero_point:y_scale:y_zero_point); "
+                          "skipping.";
+    return false;
+  }
+  Value X = op->getOperand(0);
+  Value W = op->getOperand(1);
+  Value Bias = op->getOperand(2);
+  bool hasBias = !llvm::isa<NoneType>(Bias.getType());
+
+  if (auto ap = op->getAttrOfType<StringAttr>("auto_pad"))
+    if (ap.getValue() != "NOTSET") {
+      op->emitWarning() << "LOWP_NODE_FORMATS fp8 Conv only supports "
+                            "auto_pad=NOTSET; skipping '"
+                         << nodeName << "'.";
+      return false;
+    }
+  int64_t group = 1;
+  if (auto g = op->getAttrOfType<IntegerAttr>("group"))
+    group = g.getSInt();
+
+  auto xTy = mlir::dyn_cast<RankedTensorType>(X.getType());
+  auto wTy = mlir::dyn_cast<RankedTensorType>(W.getType());
+  if (!xTy || !wTy || xTy.getRank() != 4 || wTy.getRank() != 4 ||
+      !xTy.hasStaticShape() || !wTy.hasStaticShape()) {
+    op->emitWarning() << "LOWP_NODE_FORMATS names '" << nodeName
+                       << "' for fp8 but it isn't a statically-shaped 4D "
+                          "NCHW Conv; skipping.";
+    return false;
+  }
+  DenseElementsAttr wAttr = getConstantValueAttr(W);
+  if (!wAttr) {
+    op->emitWarning() << "LOWP_NODE_FORMATS names '" << nodeName
+                       << "' for fp8 but its weight is not a compile-time "
+                          "onnx.Constant; skipping.";
+    return false;
+  }
+
+  ArrayRef<int64_t> xShape = xTy.getShape(); // [N, C, H, Win]
+  ArrayRef<int64_t> wShape = wTy.getShape(); // [CO, C/group, KH, KW]
+  int64_t N = xShape[0], C = xShape[1], H = xShape[2], Win = xShape[3];
+  int64_t CO = wShape[0], KH = wShape[2], KW = wShape[3];
+  if (group < 1 || C % group != 0 || CO % group != 0) {
+    op->emitWarning() << "LOWP_NODE_FORMATS names '" << nodeName
+                       << "' for fp8: group must evenly divide both the "
+                          "input and output channel counts; skipping.";
+    return false;
+  }
+  int64_t CPerGroup = C / group;
+  int64_t COPerGroup = CO / group;
+  if (wShape[1] != CPerGroup) {
+    op->emitWarning() << "LOWP_NODE_FORMATS names '" << nodeName
+                       << "' for fp8: W's channel-in dim must equal X's "
+                          "channel dim divided by group; skipping.";
+    return false;
+  }
+
+  auto getIntArrayAttr = [&](StringRef name,
+                              SmallVectorImpl<int64_t> &out) -> bool {
+    if (auto a = op->getAttrOfType<ArrayAttr>(name)) {
+      // ArrayAttrIntVals appends (emplace_back) rather than replacing, so
+      // callers pre-populating `out` with a default must clear it first, or
+      // the real values just get appended after the stale defaults.
+      out.clear();
+      ArrayAttrIntVals(a, out);
+      return true;
+    }
+    return false;
+  };
+  SmallVector<int64_t, 4> kernelShape{KH, KW};
+  SmallVector<int64_t, 4> ks;
+  if (getIntArrayAttr("kernel_shape", ks)) {
+    if (ks.size() != 2) {
+      op->emitWarning() << "LOWP_NODE_FORMATS fp8 Conv only supports 2D "
+                            "kernel_shape; skipping '"
+                         << nodeName << "'.";
+      return false;
+    }
+    kernelShape = ks;
+  }
+  SmallVector<int64_t, 4> strides{1, 1};
+  getIntArrayAttr("strides", strides);
+  SmallVector<int64_t, 4> dilations{1, 1};
+  getIntArrayAttr("dilations", dilations);
+  SmallVector<int64_t, 4> pads{0, 0, 0, 0};
+  getIntArrayAttr("pads", pads);
+
+  int64_t padHBegin = pads[0], padWBegin = pads[1];
+  int64_t padHEnd = pads[2], padWEnd = pads[3];
+  int64_t HPad = H + padHBegin + padHEnd;
+  int64_t WPad = Win + padWBegin + padWEnd;
+  int64_t HO = (HPad - dilations[0] * (kernelShape[0] - 1) - 1) / strides[0] + 1;
+  int64_t WO = (WPad - dilations[1] * (kernelShape[1] - 1) - 1) / strides[1] + 1;
+
+  float xScale = static_cast<float>(params[0]);
+  double xZeroPoint = params[1];
+  float yScale = static_cast<float>(params[2]);
+  double yZeroPoint = params[3];
+  float wScale = computeSymmetricScaleF8(wAttr, f8ElemType);
+
+  Location loc = op->getLoc();
+  rewriter.setInsertionPoint(op);
+  OnnxBuilder create(rewriter, loc);
+
+  Value xScaleC = buildScalarF32Constant(rewriter, loc, xScale);
+  Value xZeroPointF32 =
+      buildScalarF32Constant(rewriter, loc, static_cast<float>(xZeroPoint));
+  Value xZeroPointC =
+      buildScalarF8Constant(rewriter, loc, xZeroPoint, f8ElemType);
+  Value yScaleC = buildScalarF32Constant(rewriter, loc, yScale);
+  Value yZeroPointF32 =
+      buildScalarF32Constant(rewriter, loc, static_cast<float>(yZeroPoint));
+  Value wScaleC = buildScalarF32Constant(rewriter, loc, wScale);
+  Value wZeroPointC = buildScalarF8Constant(rewriter, loc, 0.0, f8ElemType);
+  Value yZeroPointC =
+      buildScalarF8Constant(rewriter, loc, yZeroPoint, f8ElemType);
+
+  // --- Pad X (if needed), using x_zero_point's real value as the fill. ---
+  // Unlike QLinearConv.cpp's int8 im2col (which operates on already-
+  // quantized int8 data, since onnx.Slice's ONNX-spec type list includes
+  // int8), im2col here runs on the *original f32* X: onnx.Slice/Concat's
+  // type constraint (from the ONNX op spec onnx-mlir imports) doesn't
+  // include float8 at all, only the standard int/float types, so an
+  // f8-typed Slice/Concat can't legally be constructed. Quantizing X to f8
+  // only *after* the unfold (a few lines below) instead is mathematically
+  // equivalent -- im2col is pure data movement/reordering, no arithmetic --
+  // and sidesteps the type constraint entirely.
+  Value paddedX = X;
+  if (padHBegin || padWBegin || padHEnd || padWEnd) {
+    Value padsVal = create.constantInt64(
+        {0, 0, padHBegin, padWBegin, 0, 0, padHEnd, padWEnd});
+    paddedX = create.pad(X, padsVal, xZeroPointF32, "constant");
+  }
+
+  // --- Per-group im2col (in f32, same formulas as QLinearConv.cpp's int8
+  // path) + quantized matmul. Each group only ever sees its own slice of
+  // input channels (channel-sliced from paddedX) and output channels
+  // (channel-sliced from W's constant data); group==1 (the common case)
+  // takes exactly the same path as before, just with a trivial
+  // single-iteration loop around it. ---
+  int64_t M = N * HO * WO;
+  int64_t K = kernelShape[0] * kernelShape[1] * CPerGroup;
+  auto matmulF32Ty = RankedTensorType::get({M, CO}, rewriter.getF32Type());
+  SmallVector<Value, 4> groupResults;
+  for (int64_t g = 0; g < group; ++g) {
+    Value paddedXg = paddedX;
+    if (group > 1) {
+      auto xgTy = RankedTensorType::get(
+          {N, CPerGroup, HPad, WPad}, rewriter.getF32Type());
+      paddedXg = create.slice(xgTy, paddedX,
+          create.constantInt64({g * CPerGroup}),
+          create.constantInt64({(g + 1) * CPerGroup}),
+          create.constantInt64({1}), create.constantInt64({1}));
+    }
+
+    auto tapType =
+        RankedTensorType::get({N, CPerGroup, HO, WO}, rewriter.getF32Type());
+    SmallVector<Value, 16> taps;
+    for (int64_t kh = 0; kh < kernelShape[0]; ++kh) {
+      int64_t hStart = kh * dilations[0];
+      int64_t hEnd = hStart + (HO - 1) * strides[0] + 1;
+      for (int64_t kw = 0; kw < kernelShape[1]; ++kw) {
+        int64_t wStart = kw * dilations[1];
+        int64_t wEnd = wStart + (WO - 1) * strides[1] + 1;
+        Value tap = create.slice(tapType, paddedXg,
+            create.constantInt64({hStart, wStart}),
+            create.constantInt64({hEnd, wEnd}), create.constantInt64({2, 3}),
+            create.constantInt64({strides[0], strides[1]}));
+        taps.push_back(create.transposeInt64(tap, {0, 2, 3, 1}));
+      }
+    }
+    Value unfolded =
+        taps.size() == 1 ? taps[0]
+                          : create.concat(RankedTensorType::get({N, HO, WO, K},
+                                              rewriter.getF32Type()),
+                                taps, /*axis=*/3);
+    Value AMatF32 = create.reshape(
+        RankedTensorType::get({M, K}, rewriter.getF32Type()), unfolded,
+        create.constantInt64({M, K}));
+    Value AMat = buildQuantizeCastF8(
+        rewriter, loc, AMatF32, xScaleC, xZeroPointF32, f8ElemType);
+
+    Value BMat = buildConstant(rewriter, loc,
+        quantizeAndReshapeConvWeightToF8(wAttr, wScale, f8ElemType,
+            g * COPerGroup, COPerGroup, CPerGroup, KH, KW));
+
+    auto qmmResultTy = RankedTensorType::get({M, COPerGroup}, f8ElemType);
+    Operation *qmmOp = createGenericOp(rewriter, loc, "onnx.QLinearMatMul",
+        TypeRange{qmmResultTy},
+        ValueRange{AMat, xScaleC, xZeroPointC, BMat, wScaleC, wZeroPointC,
+            yScaleC, yZeroPointC},
+        {});
+
+    rewriter.setInsertionPointAfter(qmmOp);
+    auto groupF32Ty = RankedTensorType::get({M, COPerGroup}, rewriter.getF32Type());
+    Value deq = buildDequantizeCastF8(rewriter, loc, qmmOp->getResult(0),
+        yScaleC, yZeroPointF32, groupF32Ty);
+    groupResults.push_back(deq);
+  }
+
+  Value result = groupResults.size() == 1
+                     ? groupResults[0]
+                     : create.concat(matmulF32Ty, groupResults, /*axis=*/1);
+  if (hasBias) {
+    Operation *addOp = createGenericOp(rewriter, loc, "onnx.Add",
+        TypeRange{matmulF32Ty}, ValueRange{result, Bias}, {});
+    result = addOp->getResult(0);
+  }
+
+  // [M,CO] = [N*HO*WO,CO] -> [N,HO,WO,CO] -> [N,CO,HO,WO] (NCHW).
+  Value res4d = create.reshape(
+      RankedTensorType::get({N, HO, WO, CO}, rewriter.getF32Type()), result,
+      create.constantInt64({N, HO, WO, CO}));
+  Value resNCHW = create.transposeInt64(res4d, {0, 3, 1, 2});
+
+  rewriter.replaceAllUsesWith(op->getResult(0), resNCHW);
+  rewriter.eraseOp(op);
+  return true;
+}
+
 struct ConvertONNXToLowPrecisionPass
     : public PassWrapper<ConvertONNXToLowPrecisionPass,
           OperationPass<ModuleOp>> {
@@ -666,10 +966,11 @@ struct ConvertONNXToLowPrecisionPass
   StringRef getArgument() const final { return "convert-onnx-to-lowprecision"; }
   StringRef getDescription() const final {
     return "Retype LOWP_NODE_FORMATS-selected ONNX nodes to BF16/F16 (via "
-           "onnx.Cast), INT8 (via QuantizeLinear/QLinearConv or "
-           "QLinearMatMul/DequantizeLinear; Conv, Gemm, MatMul), or "
-           "FP8E4M3/FP8E5M2 (QuantizeLinear/QLinearMatMul/DequantizeLinear; "
-           "Gemm, MatMul only -- no QLinearConv-equivalent fp8 kernel yet).";
+           "onnx.Cast), INT8 (Conv via QuantizeLinear/QLinearConv, Gemm/"
+           "MatMul via QLinearMatMul/DequantizeLinear), or FP8E4M3/FP8E5M2 "
+           "(Gemm/MatMul via QLinearMatMul; Conv via an im2col decomposition "
+           "targeting QLinearMatMul directly, since QLinearConv has no "
+           "float8-capable opset to target).";
   }
 
   void runOnOperation() override {
@@ -696,13 +997,13 @@ struct ConvertONNXToLowPrecisionPass
       bool isMatMulLike = opName == "onnx.Gemm" || opName == "onnx.MatMul";
       bool supported;
       if (fmt == LowPrecisionFormat::INT8)
-        // QLinearConv.cpp only supports int8; the fp8 formats don't have a
-        // QLinearConv-equivalent kernel yet (only QLinearMatMul's opset-21
-        // float8 branch), so Conv isn't offered for fp8e4m3/fp8e5m2 below.
         supported = opName == "onnx.Conv" || isMatMulLike;
       else if (fmt == LowPrecisionFormat::FP8E4M3 ||
                fmt == LowPrecisionFormat::FP8E5M2)
-        supported = isMatMulLike;
+        // Conv goes through retypeConvToFp8's own im2col decomposition
+        // (onnx.QLinearConv has no float8-capable opset to target, unlike
+        // QLinearMatMul), not a QLinearConv-based Krnl pattern.
+        supported = opName == "onnx.Conv" || isMatMulLike;
       else
         supported = isSupportedOpForCastRetype(op);
       if (!supported) {
@@ -728,12 +1029,20 @@ struct ConvertONNXToLowPrecisionPass
               rewriter, op, entry.quantParams, nodeName, rewriter.getI8Type());
         break;
       case LowPrecisionFormat::FP8E4M3:
-        retypeMatMulLikeToQuant(rewriter, op, entry.quantParams, nodeName,
-            Float8E4M3FNType::get(&ctx));
+        if (op->getName().getStringRef() == "onnx.Conv")
+          retypeConvToFp8(rewriter, op, entry.quantParams, nodeName,
+              Float8E4M3FNType::get(&ctx));
+        else
+          retypeMatMulLikeToQuant(rewriter, op, entry.quantParams, nodeName,
+              Float8E4M3FNType::get(&ctx));
         break;
       case LowPrecisionFormat::FP8E5M2:
-        retypeMatMulLikeToQuant(rewriter, op, entry.quantParams, nodeName,
-            Float8E5M2Type::get(&ctx));
+        if (op->getName().getStringRef() == "onnx.Conv")
+          retypeConvToFp8(rewriter, op, entry.quantParams, nodeName,
+              Float8E5M2Type::get(&ctx));
+        else
+          retypeMatMulLikeToQuant(rewriter, op, entry.quantParams, nodeName,
+              Float8E5M2Type::get(&ctx));
         break;
       default:
         retypeCastOp(rewriter, op, entry.format, nodeName);

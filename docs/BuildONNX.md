@@ -8,6 +8,36 @@ You will need to install python 3.x if its not default in your environment, and 
 
 You will also need `pybind11` which may need to be installed (mac: `brew install pybind11` or linux: `apt -y install python3-pybind11` for example) and you may need to indicate where to find the software (Mac, POWER, possibly other platforms: `export pybind11_DIR=<your path to pybind>`). Then install the `third_party/onnx` software (Mac: `pip install third_party/onnx`) typed in the top directory.
 
+## Regenerating ONNXOps.td.inc / OpBuildTable.inc reproducibly
+
+`utils/gen_onnx_mlir.py` (invoked by `make OMONNXOpsIncTranslation`, and by
+every build via the `add_custom_command` in `utils/CMakeLists.txt`) refuses
+to run against any onnx package version other than the one it's pinned to
+(the same version `requirements.txt` pins onnx to). If the Python
+interpreter CMake picked (`Python3::Interpreter`) already has a different
+onnx installed -- easy to end up with if that interpreter is shared with
+other projects, or just has a newer onnx than this pin -- the generation
+step fails, and prior to this being fixed it failed *silently*: the script
+exited 0 on a version mismatch, so the build reported success while quietly
+leaving whatever `ONNXOps.td.inc`/`OpBuildTable.inc` already happened to be
+on disk (stale, or simply missing on a fresh checkout).
+
+Two ways to fix it:
+
+- Run `pip install -r requirements.txt` for the interpreter CMake is using,
+  so its onnx matches the pin exactly.
+- Or, if you'd rather not change that interpreter's onnx (e.g. it's shared
+  with another project that wants a different version), run
+  `utils/regen-onnx-ops.sh` once by hand. It installs the pinned onnx
+  version into an isolated `build/.onnx-codegen-env` directory (via `pip
+  install --target`, touching nothing else), runs `gen_onnx_mlir.py` against
+  just that, and writes `src/Dialect/ONNX/ONNXOps.td.inc` and
+  `src/Builder/OpBuildTable.inc` directly -- safe to re-run any time, and
+  the install step is skipped on subsequent runs once the isolated
+  directory already has the right version. It forwards any arguments to
+  `gen_onnx_mlir.py`, so e.g. `utils/regen-onnx-ops.sh
+  --check-operation-version` works too.
+
  ## Upgrading ONNX in ONNX-MLIR
 
 Here are the steps taken to upgrade the ONNX version:
