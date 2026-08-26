@@ -660,6 +660,14 @@ Value MathBuilder::constant(Type type, double val) const {
         constant =
             b().create<arith::ConstantOp>(loc(), b().getF64FloatAttr(val));
       })
+      .Case<FloatType>([&](Type elementType) {
+        // Catch-all for float types without a dedicated case above (e.g.
+        // BFloat16Type, Float8E4M3FNType/Float8E5M2Type): use the generic
+        // Builder::getFloatAttr(Type, double), which rounds via the type's
+        // own APFloat semantics.
+        constant = b().create<arith::ConstantOp>(
+            loc(), b().getFloatAttr(elementType, val));
+      })
       .Case<IntegerType>([&](IntegerType elementType) {
         assert(val == static_cast<int64_t>(val) && "value is ambiguous");
         unsigned width = elementType.getWidth();
@@ -839,6 +847,294 @@ Value MathBuilder::createArithCmp(
   return b().create<arith::CmpFOp>(loc(), pred, lhs, rhs);
 }
 
+//===----------------------------------------------------------------------===//
+// F8E4M3FN / F8E5M2 <-> F32 conversion, via plain integer bit manipulation.
+//
+// Neither format has a working arith-to-LLVM lowering for float ops directly
+// on them: LLVMTypeConverter::convertFloatType maps F8 types to a same-width
+// IntegerType (there is no native LLVM F8 type), and ArithToLLVM has no
+// F8-aware pattern for ExtFOp/TruncFOp/AddFOp/etc, so those ops are simply
+// left unconverted (verified empirically in this LLVM checkout: a bare
+// arith.mulf on f8E4M3FN operands survives --convert-arith-to-llvm untouched
+// and then fails to translate to LLVM IR at all). The only piece of the
+// picture that *does* legalize is arith.bitcast between an F8 type and an
+// same-width integer (both convert to the same target `iN` type, so the
+// bitcast becomes a no-op). So: bitcast f8->i8, decode via integer ops to a
+// real f32 bit pattern (bitcast i32->f32), do the actual math in f32 (native,
+// fully supported), then encode f32->i8 the same way and bitcast back.
+//
+// This algorithm (decode's CLZ-based generic subnormal handling, encode's
+// RNE rounding with carry propagation and format-specific saturation/NaN
+// rules) was developed and exhaustively validated against Google's
+// `ml_dtypes` reference implementation in Python first -- all 512 possible
+// decode inputs and thousands of encode inputs spanning normals, subnormals,
+// zero, overflow/saturate, and NaN -- before being transcribed here. See the
+// project plan for that validation record.
+//===----------------------------------------------------------------------===//
+
+namespace {
+struct F8Format {
+  int expBits;
+  int mantBits;
+  // True: standard-IEEE-style format where an all-1s exponent field is
+  // reserved for Inf/NaN (E5M2). False: the OCP "FN" (finite) trick where
+  // an all-1s exponent is mostly just another legal normal exponent, and
+  // only the single all-1s-mantissa pattern at that exponent means NaN
+  // (E4M3FN, which as a result has no Inf representation at all).
+  bool expAllOnesReserved;
+  uint32_t maxFiniteAbsBits; // f32 bit pattern of the format's max finite value
+  uint32_t nanByte;
+};
+
+F8Format getF8Format(Type t) {
+  if (mlir::isa<Float8E5M2Type>(t))
+    return {5, 2, /*expAllOnesReserved=*/true, 0x477c0000u /*57344.0f*/,
+        0b01111101u};
+  if (mlir::isa<Float8E4M3FNType>(t))
+    return {4, 3, /*expAllOnesReserved=*/false, 0x43e00000u /*448.0f*/,
+        0b01111111u};
+  llvm_unreachable("unsupported F8 type in getF8Format");
+}
+
+bool isSupportedF8Type(Type t) {
+  return mlir::isa<Float8E5M2Type, Float8E4M3FNType>(t);
+}
+
+// f8ByteI32: an i32 holding the raw f8 byte value in its low 8 bits (the
+// upper 24 bits must be zero, i.e. this is the zero-extended byte, not a
+// sign-extended one). Returns the decoded value as f32.
+Value decodeF8(OpBuilder &b, Location loc, Value f8ByteI32,
+    const F8Format &fmt) {
+  Type i32Ty = b.getIntegerType(32);
+  auto ci32 = [&](int64_t v) -> Value {
+    return b.create<arith::ConstantOp>(loc, b.getIntegerAttr(i32Ty, v));
+  };
+  int expBits = fmt.expBits, mantBits = fmt.mantBits;
+  int bias = (1 << (expBits - 1)) - 1;
+  int expMask = (1 << expBits) - 1;
+  int mantMask = (1 << mantBits) - 1;
+
+  Value sign =
+      b.create<arith::ShRUIOp>(loc, f8ByteI32, ci32(expBits + mantBits));
+  sign = b.create<arith::AndIOp>(loc, sign, ci32(1));
+  Value expF8 = b.create<arith::ShRUIOp>(loc, f8ByteI32, ci32(mantBits));
+  expF8 = b.create<arith::AndIOp>(loc, expF8, ci32(expMask));
+  Value mantF8 = b.create<arith::AndIOp>(loc, f8ByteI32, ci32(mantMask));
+
+  Value isExpZero =
+      b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, expF8, ci32(0));
+  Value isMantZero =
+      b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, mantF8, ci32(0));
+  Value isZero = b.create<arith::AndIOp>(loc, isExpZero, isMantZero);
+
+  // Subnormal (expF8==0, mantF8!=0): find the leading 1 bit's position
+  // within the mantBits-wide field via CLZ (left-align the field to the top
+  // of a 32-bit word first), then rebias/renormalize in closed form. See
+  // the comment block above for the derivation; validated exhaustively.
+  Value mantShifted =
+      b.create<arith::ShLIOp>(loc, mantF8, ci32(32 - mantBits));
+  Value clz = b.create<math::CountLeadingZerosOp>(loc, mantShifted);
+  Value subExp32 = b.create<arith::SubIOp>(loc, ci32(127 - bias), clz);
+  Value subShiftAmt = b.create<arith::AddIOp>(loc, clz, ci32(1));
+  Value subMantRaw = b.create<arith::ShLIOp>(loc, mantF8, subShiftAmt);
+  subMantRaw = b.create<arith::AndIOp>(loc, subMantRaw, ci32(mantMask));
+  Value subMant32 =
+      b.create<arith::ShLIOp>(loc, subMantRaw, ci32(23 - mantBits));
+
+  // Normal range (expF8 != 0): plain rebias, with a format-specific override
+  // for the all-1s-exponent case (Inf/NaN for E5M2; NaN-only, single
+  // pattern, for E4M3FN -- everything else at that exponent is a normal
+  // finite value using the same rebias formula, no override needed).
+  Value normExp32 = b.create<arith::AddIOp>(loc, expF8, ci32(127 - bias));
+  Value normMant32 = b.create<arith::ShLIOp>(loc, mantF8, ci32(23 - mantBits));
+  if (fmt.expAllOnesReserved) {
+    Value isInfNan = b.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::eq, expF8, ci32(expMask));
+    normExp32 = b.create<arith::SelectOp>(loc, isInfNan, ci32(255), normExp32);
+    // normMant32's existing formula already gives 0 for Inf (mantF8==0) and
+    // nonzero for NaN (mantF8!=0), so no override needed there.
+  } else {
+    Value isNaN = b.create<arith::AndIOp>(loc,
+        b.create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::eq, expF8, ci32(expMask)),
+        b.create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::eq, mantF8, ci32(mantMask)));
+    normExp32 = b.create<arith::SelectOp>(loc, isNaN, ci32(255), normExp32);
+    normMant32 =
+        b.create<arith::SelectOp>(loc, isNaN, ci32(1 << 22), normMant32);
+  }
+
+  Value exp32 = b.create<arith::SelectOp>(loc, isExpZero, subExp32, normExp32);
+  exp32 = b.create<arith::SelectOp>(loc, isZero, ci32(0), exp32);
+  Value mant32 =
+      b.create<arith::SelectOp>(loc, isExpZero, subMant32, normMant32);
+  mant32 = b.create<arith::SelectOp>(loc, isZero, ci32(0), mant32);
+
+  Value bits32 = b.create<arith::ShLIOp>(loc, sign, ci32(31));
+  bits32 = b.create<arith::OrIOp>(
+      loc, bits32, b.create<arith::ShLIOp>(loc, exp32, ci32(23)));
+  bits32 = b.create<arith::OrIOp>(loc, bits32, mant32);
+  return b.create<arith::BitcastOp>(loc, b.getF32Type(), bits32);
+}
+
+// Returns the encoded f8 byte value as an i32 (value fits in the low 8
+// bits). RNE rounding, saturate=true (ONNX QuantizeLinear's default):
+// overflow and +/-Inf both saturate to +/-(format's max finite value); NaN
+// maps to NaN.
+Value encodeF8(OpBuilder &b, Location loc, Value f32Val, const F8Format &fmt) {
+  Type i32Ty = b.getIntegerType(32);
+  auto ci32 = [&](int64_t v) -> Value {
+    return b.create<arith::ConstantOp>(loc, b.getIntegerAttr(i32Ty, v));
+  };
+  int expBits = fmt.expBits, mantBits = fmt.mantBits;
+  int bias = (1 << (expBits - 1)) - 1;
+  int maxLegalEF8 =
+      fmt.expAllOnesReserved ? ((1 << expBits) - 2) : ((1 << expBits) - 1);
+  int shift = 23 - mantBits;
+
+  Value bits = b.create<arith::BitcastOp>(loc, i32Ty, f32Val);
+  Value sign = b.create<arith::ShRUIOp>(loc, bits, ci32(31));
+  Value absBits = b.create<arith::AndIOp>(loc, bits, ci32(0x7FFFFFFF));
+
+  Value isNaN = b.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::ugt, absBits, ci32(0x7F800000));
+
+  // Clamp magnitude to the format's max finite value. Handles overflow and
+  // literal +/-Inf uniformly: for non-negative floats, comparing raw bit
+  // patterns as unsigned integers is order-preserving (a standard trick),
+  // including +Inf's pattern (0x7F800000) being larger than any finite
+  // value's, including the format's max.
+  Value maxFiniteBitsC = ci32(static_cast<int64_t>(fmt.maxFiniteAbsBits));
+  Value clamped = b.create<arith::MinUIOp>(loc, absBits, maxFiniteBitsC);
+
+  Value exp32 = b.create<arith::ShRUIOp>(loc, clamped, ci32(23));
+  exp32 = b.create<arith::AndIOp>(loc, exp32, ci32(0xFF));
+  Value mant32 = b.create<arith::AndIOp>(loc, clamped, ci32(0x7FFFFF));
+  Value isExp32Zero =
+      b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, exp32, ci32(0));
+
+  Value fullMant = b.create<arith::OrIOp>(loc, ci32(1 << 23), mant32);
+  Value eF8 = b.create<arith::SubIOp>(loc, exp32, ci32(127 - bias));
+  // Whether the *target* F8 exponent falls in F8's normal range, decided
+  // from the raw (pre-rounding) eF8 -- distinct from isExp32Zero above,
+  // which is about the *source* f32 value being subnormal/zero. Mixing
+  // these two up (using isExp32Zero to pick normal-vs-subnormal encoding)
+  // was an earlier bug here: isExp32Zero is essentially always false for
+  // any normal-magnitude input, regardless of whether the F8 target ends
+  // up needing subnormal encoding.
+  Value isNormalRange =
+      b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge, eF8, ci32(1));
+
+  // --- Normal-range path (valid when exp32 != 0): RNE round the mantissa
+  // down to mantBits, propagate a rounding carry into the exponent, then
+  // saturate to the format's max finite value if that carry (or the input
+  // magnitude itself) pushed the exponent out of the legal range, or (for
+  // E4M3FN only) if rounding produced the one reserved NaN mantissa
+  // pattern at the max exponent. ---
+  Value roundBit = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+      b.create<arith::AndIOp>(loc,
+          b.create<arith::ShRUIOp>(loc, fullMant, ci32(shift - 1)), ci32(1)),
+      ci32(0));
+  Value stickyMask = ci32((1 << (shift - 1)) - 1);
+  Value sticky = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+      b.create<arith::AndIOp>(loc, fullMant, stickyMask), ci32(0));
+  Value kept = b.create<arith::ShRUIOp>(loc, fullMant, ci32(shift));
+  Value lsbIsOne = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+      b.create<arith::AndIOp>(loc, kept, ci32(1)), ci32(0));
+  Value roundUp = b.create<arith::AndIOp>(
+      loc, roundBit, b.create<arith::OrIOp>(loc, sticky, lsbIsOne));
+  Value keptRounded = b.create<arith::SelectOp>(
+      loc, roundUp, b.create<arith::AddIOp>(loc, kept, ci32(1)), kept);
+
+  Value mantOverflow = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
+      keptRounded, ci32(1 << (mantBits + 1)));
+  Value keptAfterCarry = b.create<arith::SelectOp>(loc, mantOverflow,
+      b.create<arith::ShRUIOp>(loc, keptRounded, ci32(1)), keptRounded);
+  Value eF8AfterCarry = b.create<arith::SelectOp>(loc, mantOverflow,
+      b.create<arith::AddIOp>(loc, eF8, ci32(1)), eF8);
+  Value mantF8Final =
+      b.create<arith::AndIOp>(loc, keptAfterCarry, ci32((1 << mantBits) - 1));
+
+  Value needSaturate = b.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::sgt, eF8AfterCarry, ci32(maxLegalEF8));
+  if (!fmt.expAllOnesReserved) {
+    Value isMaxExp = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+        eF8AfterCarry, ci32((1 << expBits) - 1));
+    Value isNaNMant = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+        mantF8Final, ci32((1 << mantBits) - 1));
+    needSaturate = b.create<arith::OrIOp>(
+        loc, needSaturate, b.create<arith::AndIOp>(loc, isMaxExp, isNaNMant));
+  }
+  uint32_t satMagByte =
+      ((fmt.maxFiniteAbsBits >> 23) - 127 + bias) << mantBits |
+      ((fmt.maxFiniteAbsBits & 0x7FFFFF) >> shift);
+  Value normalByte = b.create<arith::OrIOp>(loc,
+      b.create<arith::ShLIOp>(loc, eF8AfterCarry, ci32(mantBits)),
+      mantF8Final);
+  normalByte = b.create<arith::SelectOp>(
+      loc, needSaturate, ci32(static_cast<int64_t>(satMagByte)), normalByte);
+
+  // --- Subnormal-range path (exp32 == 0, i.e. eF8 <= 0): denormalize by an
+  // extra right-shift, with the same RNE rounding logic. A large enough
+  // shift (value far too small even for the format's subnormal range, or a
+  // literal f32 subnormal/zero input) flushes to zero. ---
+  Value extra = b.create<arith::SubIOp>(loc, ci32(1), eF8);
+  Value totalShift = b.create<arith::AddIOp>(loc, ci32(shift), extra);
+  Value flushToZero = b.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::sge, totalShift, ci32(32));
+  Value shiftGeOne = b.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::sge, totalShift, ci32(1));
+  // Clamp the shift amount fed to the actual shift ops to a safe range;
+  // results computed with this clamped amount are discarded by the
+  // `flushToZero`/`shiftGeOne` selects below whenever it wasn't the real
+  // (unclamped) amount, so the clamping itself never affects correctness.
+  Value safeShift = b.create<arith::SelectOp>(
+      loc, flushToZero, ci32(31), totalShift);
+  Value safeShiftMinus1 = b.create<arith::SelectOp>(loc, shiftGeOne,
+      b.create<arith::SubIOp>(loc, safeShift, ci32(1)), ci32(0));
+  Value subRoundBit = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+      b.create<arith::AndIOp>(loc,
+          b.create<arith::ShRUIOp>(loc, fullMant, safeShiftMinus1), ci32(1)),
+      ci32(0));
+  subRoundBit = b.create<arith::AndIOp>(loc, subRoundBit, shiftGeOne);
+  Value subStickyMask = b.create<arith::SubIOp>(loc,
+      b.create<arith::ShLIOp>(loc, ci32(1), safeShiftMinus1), ci32(1));
+  Value subSticky = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+      b.create<arith::AndIOp>(loc, fullMant, subStickyMask), ci32(0));
+  subSticky = b.create<arith::AndIOp>(loc, subSticky, shiftGeOne);
+  Value subKept = b.create<arith::ShRUIOp>(loc, fullMant, safeShift);
+  Value subLsbIsOne = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+      b.create<arith::AndIOp>(loc, subKept, ci32(1)), ci32(0));
+  Value subRoundUp = b.create<arith::AndIOp>(loc, subRoundBit,
+      b.create<arith::OrIOp>(loc, subSticky, subLsbIsOne));
+  Value subKeptRounded = b.create<arith::SelectOp>(loc, subRoundUp,
+      b.create<arith::AddIOp>(loc, subKept, ci32(1)), subKept);
+  Value subOverflowedToNormal = b.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::uge, subKeptRounded, ci32(1 << mantBits));
+  // Rounding a subnormal up into the smallest normal: exponent becomes 1,
+  // mantissa becomes 0 (subKeptRounded == 1<<mantBits in that case, whose
+  // low mantBits bits are already all 0).
+  Value subByte = b.create<arith::SelectOp>(loc, subOverflowedToNormal,
+      ci32(1 << mantBits),
+      b.create<arith::AndIOp>(loc, subKeptRounded, ci32((1 << mantBits) - 1)));
+  subByte = b.create<arith::SelectOp>(loc, flushToZero, ci32(0), subByte);
+
+  Value magnitudeByte =
+      b.create<arith::SelectOp>(loc, isNormalRange, normalByte, subByte);
+  magnitudeByte =
+      b.create<arith::SelectOp>(loc, isExp32Zero, ci32(0), magnitudeByte);
+  Value nanByteC = ci32(static_cast<int64_t>(fmt.nanByte));
+  Value byteNoSign =
+      b.create<arith::SelectOp>(loc, isNaN, nanByteC, magnitudeByte);
+  Value signBit = b.create<arith::ShLIOp>(loc, sign, ci32(expBits + mantBits));
+  // NaN's canonical byte already has its own fixed sign bit baked in
+  // (fmt.nanByte); don't OR the input's sign into it a second time.
+  Value result = b.create<arith::SelectOp>(loc, isNaN, byteNoSign,
+      b.create<arith::OrIOp>(loc, signBit, byteNoSign));
+  return result;
+}
+} // namespace
+
 // Several operations in the arith dialect require signless integers. This
 // cast remove the sign of integer types for successful processing, to the
 // best of my understanding.
@@ -1016,6 +1312,32 @@ Value MathBuilder::cast(Type destType, Value src) const {
   // Float to float conversions.
   if (mlir::isa<FloatType>(srcElemType) && mlir::isa<FloatType>(destElemType)) {
     assert((bitExtend || bitTrunc) && "expected extend or trunc");
+    // F8E4M3FN/F8E5M2 have no working arith-to-LLVM lowering for ExtFOp/
+    // TruncFOp (see the decodeF8/encodeF8 comment block above); scalar-only
+    // for now (SIMD-vectorized F8 conversion isn't needed yet).
+    bool srcIsF8 = isSupportedF8Type(srcElemType);
+    bool destIsF8 = isSupportedF8Type(destElemType);
+    if ((srcIsF8 || destIsF8) && !srcVecType && !destVecType) {
+      if (srcIsF8 && destElemType.isF32()) {
+        Value srcI8 = b().create<arith::BitcastOp>(
+            loc(), b().getIntegerType(8), src);
+        Value srcI32 =
+            b().create<arith::ExtUIOp>(loc(), b().getIntegerType(32), srcI8);
+        return decodeF8(b(), loc(), srcI32, getF8Format(srcElemType));
+      }
+      if (destIsF8 && srcElemType.isF32()) {
+        Value byteI32 = encodeF8(b(), loc(), src, getF8Format(destElemType));
+        Value byteI8 =
+            b().create<arith::TruncIOp>(loc(), b().getIntegerType(8), byteI32);
+        return b().create<arith::BitcastOp>(loc(), destType, byteI8);
+      }
+      // Any other F8-involving pair (F8<->F8 of a different format, or
+      // F8<->F16/BF16/F64): go through F32 as an intermediate, same 2-step
+      // pattern used elsewhere in this function for other multi-step
+      // conversions.
+      Value step1 = cast(b().getF32Type(), src);
+      return cast(destType, step1);
+    }
     if (bitExtend)
       return b().create<arith::ExtFOp>(loc(), destType, src);
     else

@@ -137,7 +137,7 @@ op_dialect_version_map_["PRelu"] = {16};
 op_dialect_version_map_["Pad"] = {21, 18, 13, 11, 2};
 op_dialect_version_map_["Pow"] = {15};
 op_dialect_version_map_["QLinearConv"] = {10};
-op_dialect_version_map_["QLinearMatMul"] = {10};
+op_dialect_version_map_["QLinearMatMul"] = {21, 10};
 op_dialect_version_map_["QuantizeLinear"] = {19};
 op_dialect_version_map_["RNN"] = {22};
 op_dialect_version_map_["RandomNormal"] = {22};
@@ -470,6 +470,8 @@ import_handler_map_["QLinearConv"] =
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXQLinearConvOp>;
 import_handler_map_["QLinearMatMul"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXQLinearMatMulOp>;
+import_handler_map_["QLinearMatMulV10"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXQLinearMatMulV10Op>;
 import_handler_map_["QuantizeLinear"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXQuantizeLinearOp>;
 import_handler_map_["RNN"] = 

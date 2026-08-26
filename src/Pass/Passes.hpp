@@ -100,6 +100,9 @@ std::unique_ptr<mlir::Pass> createConvertONNXToPositPass(unsigned nbits,
 std::unique_ptr<mlir::Pass> createConvertPositToKrnlPass();
 std::unique_ptr<mlir::Pass> createConvertPositToKrnlPass(unsigned nbits, unsigned es);
 
+// BF16/F16/INT8/FP8 per-layer low-precision formats (LOWP_NODE_FORMATS env var).
+std::unique_ptr<mlir::Pass> createConvertONNXToLowPrecisionPass();
+
 
 /// Add pass for lowering to Krnl IR.
 std::unique_ptr<mlir::Pass> createLowerToKrnlPass();

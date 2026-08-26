@@ -306,6 +306,19 @@ LogicalResult ONNXQLinearMatMulOp::inferShapes(
   return shapeHelper.computeShapeAndUpdateType(elementType);
 }
 
+// Opset 10 (int8/uint8-only) form, kept for models declaring an opset < 21;
+// identical shape semantics to the canonical (opset 21) op above.
+LogicalResult ONNXQLinearMatMulV10Op::inferShapes(
+    std::function<void(Region &)> doShapeInference) {
+  if (!hasShapeAndRank(getA()) || !hasShapeAndRank(getB()))
+    return success();
+
+  Type elementType =
+      mlir::cast<ShapedType>(getResult().getType()).getElementType();
+  ONNXQLinearMatMulV10OpShapeHelper shapeHelper(getOperation(), {});
+  return shapeHelper.computeShapeAndUpdateType(elementType);
+}
+
 //===----------------------------------------------------------------------===//
 // Template instantiation; keep at the end of the file.
 //===----------------------------------------------------------------------===//
@@ -315,5 +328,6 @@ namespace onnx_mlir {
 template struct ONNXGenericMatMulOpShapeHelper<ONNXMatMulOp>;
 template struct ONNXGenericMatMulOpShapeHelper<ONNXMatMulIntegerOp>;
 template struct ONNXGenericMatMulOpShapeHelper<ONNXQLinearMatMulOp>;
+template struct ONNXGenericMatMulOpShapeHelper<ONNXQLinearMatMulV10Op>;
 
 } // namespace onnx_mlir

@@ -218,7 +218,7 @@ version_dict = {
     "Pad": [21, 18, 13, 11, 2],
     "Pow": [15],
     "QLinearConv": [10],
-    "QLinearMatMul": [10],
+    "QLinearMatMul": [21, 10],
     "QuantizeLinear": [19],
     "RNN": [22],
     "RandomNormal": [22],

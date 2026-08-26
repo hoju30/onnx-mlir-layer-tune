@@ -10,6 +10,8 @@ add_subdirectory(ONNXToTOSA)
 add_subdirectory(ONNXToPosit)
 # 12/17 posit to krnl
 add_subdirectory(PositToKrnl)
+# BF16/F16/INT8/FP8 per-layer low-precision formats
+add_subdirectory(ONNXToLowPrecision)
 
 if (ONNX_MLIR_ENABLE_STABLEHLO)
   add_subdirectory(ONNXToStablehlo)

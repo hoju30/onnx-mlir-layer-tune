@@ -54,4 +54,8 @@ target_link_libraries(onnx-mlir-opt PUBLIC
   softposit          # softposit
 )
 
+target_link_libraries(onnx-mlir-opt PUBLIC
+  OMONNXToLowPrecision   # BF16/F16/INT8/FP8 per-layer formats
+)
+
 message(STATUS "test run this cmake")

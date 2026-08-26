@@ -565,6 +565,11 @@ struct ONNXGenericMatMulOpShapeHelper : public ONNXOpShapeHelper {
 using ONNXMatMulOpShapeHelper = ONNXGenericMatMulOpShapeHelper<mlir::ONNXMatMulOp>;
 using ONNXMatMulIntegerOpShapeHelper = ONNXGenericMatMulOpShapeHelper<mlir::ONNXMatMulIntegerOp>;
 using ONNXQLinearMatMulOpShapeHelper = ONNXGenericMatMulOpShapeHelper<mlir::ONNXQLinearMatMulOp>;
+// QLinearMatMul opset 21 (canonical, float8-capable) vs the older opset 10
+// (int8/uint8-only) schema kept around as ONNXQLinearMatMulV10Op for models
+// that declare an opset < 21; both have identical operand/shape semantics,
+// only their type constraints differ, so they share the same shape helper.
+using ONNXQLinearMatMulV10OpShapeHelper = ONNXGenericMatMulOpShapeHelper<mlir::ONNXQLinearMatMulV10Op>;
 // clang-format on
 
 //===----------------------------------------------------------------------===//
