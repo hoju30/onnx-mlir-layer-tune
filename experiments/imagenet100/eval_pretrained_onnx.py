@@ -24,6 +24,7 @@ import argparse
 import io
 import json
 import os
+import sys
 import time
 
 import numpy as np
@@ -31,6 +32,8 @@ import onnxruntime as ort
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
+from preprocessing_variants import VARIANTS, MODEL_PREPROCESS
 
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -61,7 +64,16 @@ def main():
     ap.add_argument("--label-map", required=True)
     ap.add_argument("--limit", type=int, default=5000, help="5000 = full validation split")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--preprocess", default=None,
+                    help="override preprocessing variant (see preprocessing_variants.py); "
+                         "auto-selected from MODEL_PREPROCESS for known non-standard exports")
     args = ap.parse_args()
+
+    preprocess_fn = preprocess
+    variant_name = args.preprocess or MODEL_PREPROCESS.get((args.arch, args.variant))
+    if variant_name:
+        preprocess_fn = VARIANTS[variant_name]
+        print(f"using non-standard preprocessing: {variant_name}", flush=True)
 
     onnx_path = os.path.join(args.model_dataset_dir, args.arch, args.variant, "model.onnx")
     label_map = json.load(open(args.label_map))
@@ -90,8 +102,8 @@ def main():
         local_label = ex["label"]
         true_1k = local_to_1k[local_label]
 
-        x = preprocess(img)[None, ...]
-        logits = sess.run(None, {input_name: x})[0][0]
+        x = preprocess_fn(img)[None, ...].astype(np.float32)
+        logits = sess.run(None, {input_name: x})[0].reshape(-1)
 
         if top_k_hits(logits, true_1k, 1):
             unrestricted_top1 += 1

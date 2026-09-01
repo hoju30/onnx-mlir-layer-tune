@@ -84,6 +84,44 @@ def posit_lower_to_ll(onnx_mlir_in, ll_out, env=None, extra_opt_flags=None):
     run([TRANSLATE, "--mlir-to-llvmir", llvm, "-o", ll_out])
     return ll_out
 
+def lowprecision_lower_to_ll(onnx_mlir_in, ll_out, env=None):
+    """Run the low-precision lowering pipeline -> .ll. Unlike posit_lower_to_ll,
+    there is no separate dialect-specific "X-to-Krnl" stage: bf16/f16/int8/fp8
+    are all realized as plain ONNX Dialect ops (Cast / QuantizeLinear /
+    QLinearConv / QLinearMatMul / DequantizeLinear), so the retyped IR goes
+    straight into the normal --convert-onnx-to-krnl used for fp32."""
+    lowp = ll_out.replace(".ll", ".lowp.mlir")
+    krnl = ll_out.replace(".ll", ".krnl.mlir")
+    llvm = ll_out.replace(".ll", ".llvm.mlir")
+
+    # Stage 1: ONNX dialect -> low-precision-retyped ONNX dialect
+    run([OPT, onnx_mlir_in, "--shape-inference", "--convert-onnx-to-lowprecision",
+         "-o", lowp], env=env)
+    # Stage 2: ONNX -> Krnl (same pass as the fp32 path; QLinearConv/QLinearMatMul
+    # already have Krnl lowering patterns, see docs/LowPrecisionFormats.md)
+    run([OPT, lowp,
+         "--canonicalize", "--shape-inference",
+         "--convert-onnx-to-krnl", "--canonicalize",
+         "-o", krnl])
+    # Stage 3: Krnl -> LLVM dialect
+    run([OPT, krnl,
+         "--convert-krnl-to-affine", "--convert-krnl-to-llvm",
+         "--reconcile-unrealized-casts",
+         "-o", llvm])
+    # Stage 4: LLVM dialect -> LLVM IR
+    run([TRANSLATE, "--mlir-to-llvmir", llvm, "-o", ll_out])
+    return ll_out
+
+def compile_so_lowprecision(ll_path, so_path):
+    """Compile .ll -> .so for a low-precision-lowered model. Unlike the posit
+    path, low-precision formats need no posit_runtime.cpp / SoftPosit/Universal
+    linkage -- bf16/f16 use LLVM-native casts and int8/fp8 use QLinearConv/
+    QLinearMatMul's own Krnl-lowered arithmetic, so this only needs onnx-mlir's
+    standard C runtime."""
+    run([CLANGXX, "-std=c++20", "-O3", "-fPIC", "-shared",
+         ll_path, CRUNTIME, "-o", so_path])
+    return so_path
+
 def compile_so(ll_path, so_path):
     """Compile .ll + posit_runtime.cpp → .so using Universal backend."""
     rt_obj = so_path + ".runtime.o"

@@ -37,16 +37,20 @@ static bool isQuantFormat(LowPrecisionFormat fmt) {
 
 struct NodeFormatEntry {
   LowPrecisionFormat format;
-  // INT8/FP8E4M3/FP8E5M2 only: [x_scale, x_zero_point, y_scale,
-  // y_zero_point], supplied via LOWP_NODE_FORMATS as
+  // INT8/FP8E4M3/FP8E5M2 only, supplied via LOWP_NODE_FORMATS as
   // "Conv_1:int8:<x_scale>:<x_zero_point>:<y_scale>:<y_zero_point>". For
-  // int8, x_zero_point/y_zero_point are integer values; for the fp8 formats
-  // they're real values (almost always 0.0 in practice -- see the fp8
+  // int8, the zero-points are integer values; for the fp8 formats they're
+  // real values (almost always 0.0 in practice -- see the fp8
   // quantize/dequantize helpers below). Weight/bias quantization params are
   // derived from the weight/bias constants themselves (see the
   // quantizeConstant* helpers below), not supplied here, since they're
   // static and don't need calibration.
-  SmallVector<double, 4> quantParams;
+  //
+  // Conv/Gemm/MatMul/Relu (single-input ops) take 4 params as above.
+  // Add/Sub/Mul/Div (2 independently-scaled inputs) take 6:
+  // <a_scale>:<a_zero_point>:<b_scale>:<b_zero_point>:<y_scale>:<y_zero_point>
+  // -- see retypeElementwiseToQuant below.
+  SmallVector<double, 6> quantParams;
 };
 
 static bool parseLowPrecisionFormatTag(
@@ -521,6 +525,142 @@ static Value buildQuantizedWeightConstant(IRRewriter &rewriter, Location loc,
       rewriter, loc, quantizeToI8(bAttr, wScale, /*zeroPoint=*/0));
 }
 
+// Quantize `val` to targetElemType at (scale, zeroPoint), then immediately
+// dequantize it straight back to `val`'s own (f32) type. This simulates the
+// precision loss of storing `val` in targetElemType at this scale/zero-point
+// without actually keeping it in that format -- used to build the
+// elementwise ops' QDQ handling below, since unlike Conv/Gemm/MatMul there's
+// no ONNX quantized-arithmetic op to target for them (no QLinearRelu/
+// QLinearAdd/etc. exist), so the "low precision" here is entirely the QDQ
+// noise on each operand/result; the actual arithmetic stays in f32.
+static Value quantDequantRoundTrip(IRRewriter &rewriter, Location loc,
+    Value val, double scale, double zeroPoint, Type targetElemType) {
+  Value scaleC = buildScalarF32Constant(rewriter, loc, static_cast<float>(scale));
+  if (isF8ElemType(targetElemType)) {
+    Value zpF32 =
+        buildScalarF32Constant(rewriter, loc, static_cast<float>(zeroPoint));
+    Value q = buildQuantizeCastF8(rewriter, loc, val, scaleC, zpF32, targetElemType);
+    return buildDequantizeCastF8(rewriter, loc, q, scaleC, zpF32, val.getType());
+  }
+  Value zpC = buildScalarZeroPointConstant(rewriter, loc, zeroPoint, targetElemType);
+  Value q = buildQuantizeLinear(rewriter, loc, val, scaleC, zpC, targetElemType);
+  return buildDequantizeLinear(rewriter, loc, q, scaleC, zpC, val.getType());
+}
+
+// Ops handled by the QDQ-round-trip-only path below: onnx.Relu/AveragePool/
+// GlobalAveragePool (1 operand) or one of the binary elementwise ops (2
+// operands). No int8/fp8-typed version of the op itself is ever built --
+// see quantDequantRoundTrip above. AveragePool/GlobalAveragePool fit the
+// same single-input/single-output shape as Relu (their kernel_shape/
+// strides/pads attributes, if any, ride along unchanged via op->getAttrs()
+// in retypeElementwiseToQuant); like Add/Mul/Div, averaging already-
+// quantized-then-dequantized values isn't bit-identical to averaging in a
+// truly native low-precision accumulator, but is the same QDQ-simulation
+// tradeoff already accepted for the other ops here.
+//
+// onnx.MaxPool is deliberately NOT in this list despite fitting the same
+// shape (1 real operand, though a fixed ODS arity of 2 results -- Y and
+// Indices, the latter typed NoneType when unused -- which
+// retypeElementwiseToQuant does handle generically, round-tripping only
+// result(0) and forwarding the rest). It's held back due to an unresolved,
+// reproducible bug: `onnx-mlir-opt ... --convert-onnx-to-lowprecision
+// --canonicalize --convert-onnx-to-krnl ...` fails to legalize the rebuilt
+// onnx.MaxPool ("failed to legalize operation 'onnx.MaxPool'") *only* when
+// `--convert-krnl-to-llvm` is ALSO present later in the same CLI invocation
+// -- despite --convert-krnl-to-llvm running strictly after --convert-onnx-
+// to-krnl in the pipeline, and despite the exact same IR (round-tripped
+// through a text dump and re-parsed as a separate onnx-mlir-opt invocation)
+// legalizing fine either way. This isn't a --canonicalize-placement issue
+// (unlike the fp8 elementwise dominance bug documented above, which this
+// bug is NOT the same as -- that one manifests during --convert-onnx-to-
+// krnl itself regardless of what follows it), and root-causing it would
+// need digging into how onnx-mlir-opt's CLI pass registration/PassManager
+// setup differs based on which flags are co-present -- not yet done. Do not
+// re-add "onnx.MaxPool" here without either fixing that or re-verifying the
+// exact repro (a hand-written onnx.MaxPool node run through the full
+// --convert-onnx-to-lowprecision -> ... -> --convert-krnl-to-llvm pipeline
+// in one invocation) no longer fails.
+static bool isElementwiseQuantOp(StringRef opName) {
+  return opName == "onnx.Relu" || opName == "onnx.Add" ||
+         opName == "onnx.Sub" || opName == "onnx.Mul" || opName == "onnx.Div" ||
+         opName == "onnx.AveragePool" || opName == "onnx.GlobalAveragePool";
+}
+
+// Rewrite a single onnx.Relu/Add/Sub/Mul/Div node by QDQ-round-tripping each
+// operand at its own scale/zero-point (quantDequantRoundTrip above), applying
+// the *same* op unchanged to the round-tripped values, then QDQ-round-
+// tripping the result. Relu (1 operand) takes 4 params
+// (x_scale:x_zero_point:y_scale:y_zero_point); Add/Sub/Mul/Div (2 operands,
+// each independently scaled/zero-pointed, since they're typically fed by two
+// different upstream tensors) take 6
+// (a_scale:a_zero_point:b_scale:b_zero_point:y_scale:y_zero_point).
+//
+// PIPELINE NOTE (fp8e4m3/fp8e5m2 only): when two or more of these nodes
+// appear in the same function, `onnx-mlir-opt` needs a `--canonicalize`
+// between `--convert-onnx-to-lowprecision` and `--convert-onnx-to-krnl` (not
+// just the usual one *after* `--convert-onnx-to-krnl`), or the second QDQ
+// chain's Krnl lowering can produce a dominance violation
+// (`--convert-onnx-to-krnl` itself fails to verify). Root cause: each fp8
+// round trip expands to plain onnx.Div/Add/Cast/Sub/Mul (see
+// buildQuantizeCastF8/buildDequantizeCastF8 above -- there's no literal
+// QuantizeLinear/DequantizeLinear for float8), which goes through mainline's
+// generic Elementwise.cpp lowering; that lowering's own comment states it
+// assumes canonicalization has already hoisted constants, a precondition
+// this project's manual pipelines hadn't previously had reason to violate
+// (a single QDQ chain, or int8's literal QuantizeLinear/DequantizeLinear
+// path, never triggered it). Confirmed via a minimal repro: two chained
+// fp8 QDQ round trips reliably fail --convert-onnx-to-krnl without a prior
+// --canonicalize and reliably succeed (bit-exact numerically) with one;
+// the equivalent two-node int8 case never needed it.
+static bool retypeElementwiseToQuant(IRRewriter &rewriter, Operation *op,
+    ArrayRef<double> params, StringRef nodeName, Type targetElemType) {
+  unsigned numOperands = op->getNumOperands();
+  size_t expectedParams = 2 * static_cast<size_t>(numOperands) + 2;
+  if (params.size() != expectedParams) {
+    op->emitWarning() << "LOWP_NODE_FORMATS entry for '" << nodeName << "' ("
+                       << op->getName() << ") needs exactly " << expectedParams
+                       << " params; skipping.";
+    return false;
+  }
+
+  Location loc = op->getLoc();
+  rewriter.setInsertionPoint(op);
+
+  SmallVector<Value, 2> qdqOperands;
+  for (unsigned i = 0; i < numOperands; ++i) {
+    Value operand = op->getOperand(i);
+    if (!isFloatTensor(operand.getType())) {
+      op->emitWarning() << "LOWP_NODE_FORMATS names '" << nodeName
+                         << "' but operand " << i
+                         << " is not a float tensor; skipping.";
+      return false;
+    }
+    qdqOperands.push_back(quantDequantRoundTrip(
+        rewriter, loc, operand, params[2 * i], params[2 * i + 1], targetElemType));
+  }
+
+  // Rebuild with the op's full original result-type list (e.g. onnx.MaxPool
+  // has a fixed arity of 2 results, Y and Indices -- the latter typed
+  // NoneType when unused, not omitted). Only result(0) (the actual numeric
+  // output) gets QDQ-round-tripped below; any further results (MaxPool's
+  // Indices) aren't numeric values to quantize and are forwarded unchanged.
+  Operation *newOp = createGenericOp(rewriter, loc, op->getName().getStringRef(),
+      op->getResultTypes(), qdqOperands, op->getAttrs());
+
+  rewriter.setInsertionPointAfter(newOp);
+  double yScale = params[2 * numOperands];
+  double yZeroPoint = params[2 * numOperands + 1];
+  Value result = quantDequantRoundTrip(
+      rewriter, loc, newOp->getResult(0), yScale, yZeroPoint, targetElemType);
+
+  SmallVector<Value, 2> replacements;
+  replacements.push_back(result);
+  for (unsigned i = 1; i < op->getNumResults(); ++i)
+    replacements.push_back(newOp->getResult(i));
+  rewriter.replaceOp(op, replacements);
+  return true;
+}
+
 // Rewrite a single onnx.Gemm or onnx.MatMul node into QuantizeLinear(A) ->
 // onnx.QLinearMatMul -> DequantizeLinear(Y) [-> Add(beta*C) for Gemm's
 // optional bias]. Scope: 2D A/B only, B a compile-time constant. Gemm's
@@ -970,7 +1110,11 @@ struct ConvertONNXToLowPrecisionPass
            "MatMul via QLinearMatMul/DequantizeLinear), or FP8E4M3/FP8E5M2 "
            "(Gemm/MatMul via QLinearMatMul; Conv via an im2col decomposition "
            "targeting QLinearMatMul directly, since QLinearConv has no "
-           "float8-capable opset to target).";
+           "float8-capable opset to target). Relu/Add/Sub/Mul/Div/"
+           "AveragePool/GlobalAveragePool under INT8/FP8E4M3/FP8E5M2 are "
+           "QDQ-round-tripped only (no quantized op exists for them in "
+           "ONNX), simulating per-operand precision loss while the "
+           "arithmetic itself stays in f32.";
   }
 
   void runOnOperation() override {
@@ -997,13 +1141,15 @@ struct ConvertONNXToLowPrecisionPass
       bool isMatMulLike = opName == "onnx.Gemm" || opName == "onnx.MatMul";
       bool supported;
       if (fmt == LowPrecisionFormat::INT8)
-        supported = opName == "onnx.Conv" || isMatMulLike;
+        supported =
+            opName == "onnx.Conv" || isMatMulLike || isElementwiseQuantOp(opName);
       else if (fmt == LowPrecisionFormat::FP8E4M3 ||
                fmt == LowPrecisionFormat::FP8E5M2)
         // Conv goes through retypeConvToFp8's own im2col decomposition
         // (onnx.QLinearConv has no float8-capable opset to target, unlike
         // QLinearMatMul), not a QLinearConv-based Krnl pattern.
-        supported = opName == "onnx.Conv" || isMatMulLike;
+        supported =
+            opName == "onnx.Conv" || isMatMulLike || isElementwiseQuantOp(opName);
       else
         supported = isSupportedOpForCastRetype(op);
       if (!supported) {
@@ -1020,25 +1166,35 @@ struct ConvertONNXToLowPrecisionPass
       auto nameAttr = op->getAttrOfType<StringAttr>("onnx_node_name");
       StringRef nodeName = nameAttr.getValue();
       const NodeFormatEntry &entry = formatMap[nodeName.str()];
+      StringRef opName = op->getName().getStringRef();
       switch (entry.format) {
       case LowPrecisionFormat::INT8:
-        if (op->getName().getStringRef() == "onnx.Conv")
+        if (opName == "onnx.Conv")
           retypeConvToInt8(rewriter, op, entry.quantParams, nodeName);
+        else if (isElementwiseQuantOp(opName))
+          retypeElementwiseToQuant(
+              rewriter, op, entry.quantParams, nodeName, rewriter.getI8Type());
         else
           retypeMatMulLikeToQuant(
               rewriter, op, entry.quantParams, nodeName, rewriter.getI8Type());
         break;
       case LowPrecisionFormat::FP8E4M3:
-        if (op->getName().getStringRef() == "onnx.Conv")
+        if (opName == "onnx.Conv")
           retypeConvToFp8(rewriter, op, entry.quantParams, nodeName,
+              Float8E4M3FNType::get(&ctx));
+        else if (isElementwiseQuantOp(opName))
+          retypeElementwiseToQuant(rewriter, op, entry.quantParams, nodeName,
               Float8E4M3FNType::get(&ctx));
         else
           retypeMatMulLikeToQuant(rewriter, op, entry.quantParams, nodeName,
               Float8E4M3FNType::get(&ctx));
         break;
       case LowPrecisionFormat::FP8E5M2:
-        if (op->getName().getStringRef() == "onnx.Conv")
+        if (opName == "onnx.Conv")
           retypeConvToFp8(rewriter, op, entry.quantParams, nodeName,
+              Float8E5M2Type::get(&ctx));
+        else if (isElementwiseQuantOp(opName))
+          retypeElementwiseToQuant(rewriter, op, entry.quantParams, nodeName,
               Float8E5M2Type::get(&ctx));
         else
           retypeMatMulLikeToQuant(rewriter, op, entry.quantParams, nodeName,

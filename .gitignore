@@ -205,6 +205,9 @@ docs/mnist_example/dataset/
 docs/mnist_example/mnist_activation_stats.json
 docs/mnist_example/mnist_risk_calibration.json
 docs/mnist_example/mnist_whole_model_measurements.json
+docs/mnist_example/dataset_lowp/
+docs/mnist_example/mnist_lowp_calibration.json
+docs/mnist_example/mnist_lowp_configs.json
 docs/mobilenet_example/
 experiments/imagenet100/model_dataset/
 experiments/imagenet100/imagenet100_label_map.json
