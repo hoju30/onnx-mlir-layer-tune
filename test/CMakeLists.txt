@@ -72,4 +72,5 @@ add_subdirectory(unit)
 add_subdirectory(compilerlib)
 add_subdirectory(perf)
 add_subdirectory(multiple-models)
+add_subdirectory(mixed_precision)
 
