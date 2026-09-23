@@ -12,6 +12,8 @@ add_subdirectory(ONNXToPosit)
 add_subdirectory(PositToKrnl)
 # BF16/F16/INT8/FP8 per-layer low-precision formats
 add_subdirectory(ONNXToLowPrecision)
+# weight/activation-separated QDQ mixed-precision (int4-int8/posit/f16/bf16)
+add_subdirectory(ONNXToMixedPrecision)
 
 if (ONNX_MLIR_ENABLE_STABLEHLO)
   add_subdirectory(ONNXToStablehlo)

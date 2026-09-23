@@ -1,0 +1,4 @@
+# ImageNet validation images (ImageNet terms of access: research use only, no redistribution)
+# and the per-variant logits (~400 KB each, reproducible). The small JSON/text results stay trackable.
+runs/*/images/
+runs/*/logits_*.npy

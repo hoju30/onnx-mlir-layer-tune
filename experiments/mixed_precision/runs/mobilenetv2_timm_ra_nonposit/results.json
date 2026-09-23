@@ -1,0 +1,1379 @@
+{
+ "model": "experiments/imagenet100/model_dataset/mobilenetv2/timm_ra/model.onnx",
+ "weight_formats": [
+  "int8",
+  "f16",
+  "bf16",
+  "fp32"
+ ],
+ "act_formats": [
+  "int8",
+  "f16",
+  "bf16",
+  "fp32"
+ ],
+ "variants": {
+  "onnx_mlir_fp32": {
+   "all": {
+    "n": 100,
+    "top1": 0.81,
+    "top5": 0.95,
+    "top1_correct": 81,
+    "top5_correct": 95
+   },
+   "calibration": {
+    "n": 10,
+    "top1": 0.7,
+    "top5": 0.9,
+    "top1_correct": 7,
+    "top5_correct": 9
+   },
+   "held_out": {
+    "n": 90,
+    "top1": 0.8222222222222222,
+    "top5": 0.9555555555555556,
+    "top1_correct": 74,
+    "top5_correct": 86
+   },
+   "non_finite_rows": 0,
+   "same_top1_as_fp32": 100,
+   "max_abs_logit_diff_vs_fp32": 1.430511474609375e-05,
+   "mean_abs_logit_diff_vs_fp32": 1.430725433237967e-06,
+   "compile_seconds": 5.950432777404785,
+   "run_seconds_per_image": 0.037248613834381106,
+   "peak_rss_gb": 0.11367416381835938,
+   "steps": {
+    "onnx_level": 0.33777546882629395,
+    "to_krnl": 0.20430994033813477,
+    "to_llvm": 0.963914155960083,
+    "translate": 0.35248303413391113,
+    "link": 4.0913732051849365
+   },
+   "warnings": [],
+   "ir_after_pass": null,
+   "ir_after_onnx_passes": null
+  },
+  "pass_identity_fp32": {
+   "all": {
+    "n": 100,
+    "top1": 0.81,
+    "top5": 0.95,
+    "top1_correct": 81,
+    "top5_correct": 95
+   },
+   "calibration": {
+    "n": 10,
+    "top1": 0.7,
+    "top5": 0.9,
+    "top1_correct": 7,
+    "top5_correct": 9
+   },
+   "held_out": {
+    "n": 90,
+    "top1": 0.8222222222222222,
+    "top5": 0.9555555555555556,
+    "top1_correct": 74,
+    "top5_correct": 86
+   },
+   "non_finite_rows": 0,
+   "same_top1_as_fp32": 100,
+   "max_abs_logit_diff_vs_fp32": 1.430511474609375e-05,
+   "mean_abs_logit_diff_vs_fp32": 1.430725433237967e-06,
+   "compile_seconds": 5.726901054382324,
+   "run_seconds_per_image": 0.04010939359664917,
+   "peak_rss_gb": 0.11353683471679688,
+   "steps": {
+    "mixed_pass": 0.10226011276245117,
+    "onnx_level": 0.13130807876586914,
+    "to_krnl": 0.12260150909423828,
+    "to_llvm": 0.7752504348754883,
+    "translate": 0.35440754890441895,
+    "link": 4.137240648269653
+   },
+   "warnings": [],
+   "ir_after_pass": {
+    "onnx.Round": 0,
+    "onnx.Div": 0,
+    "onnx.Cast": 0,
+    "posit.from_f32": 0,
+    "posit.to_f32": 0
+   },
+   "ir_after_onnx_passes": {
+    "onnx.Round": 0,
+    "onnx.Div": 0,
+    "onnx.Cast": 0,
+    "posit.from_f32": 0,
+    "posit.to_f32": 0
+   },
+   "vs_onnxruntime_simulation": {
+    "max_abs_diff": 1.430511474609375e-05,
+    "mean_abs_diff": 1.430725433237967e-06,
+    "same_top1": 100,
+    "simulated_top1": 0.81
+   },
+   "site_check": {
+    "int": {
+     "expected": 0,
+     "found": 0
+    },
+    "half(cast pairs)": {
+     "expected": 0,
+     "found": 0
+    },
+    "posit from_f32": {
+     "expected": 0,
+     "found": 0
+    },
+    "posit to_f32": {
+     "expected": 0,
+     "found": 0
+    }
+   },
+   "sites_match": true,
+   "qdq_survived_onnx_passes": true,
+   "bit_identical_to_fp32_baseline": true
+  },
+  "random_seed1": {
+   "all": {
+    "n": 100,
+    "top1": 0.75,
+    "top5": 0.93,
+    "top1_correct": 75,
+    "top5_correct": 93
+   },
+   "calibration": {
+    "n": 10,
+    "top1": 0.7,
+    "top5": 0.9,
+    "top1_correct": 7,
+    "top5_correct": 9
+   },
+   "held_out": {
+    "n": 90,
+    "top1": 0.7555555555555555,
+    "top5": 0.9333333333333333,
+    "top1_correct": 68,
+    "top5_correct": 84
+   },
+   "non_finite_rows": 0,
+   "same_top1_as_fp32": 89,
+   "max_abs_logit_diff_vs_fp32": 5.647306442260742,
+   "mean_abs_logit_diff_vs_fp32": 0.35038265585899353,
+   "compile_seconds": 11.343801021575928,
+   "run_seconds_per_image": 0.04776465177536011,
+   "peak_rss_gb": 0.1129302978515625,
+   "steps": {
+    "mixed_pass": 0.5016448497772217,
+    "onnx_level": 0.27313756942749023,
+    "to_krnl": 0.15231943130493164,
+    "to_llvm": 1.165374994277954,
+    "translate": 0.4057133197784424,
+    "link": 8.387671947479248
+   },
+   "warnings": [],
+   "ir_after_pass": {
+    "onnx.Round": 51,
+    "onnx.Div": 51,
+    "onnx.Cast": 76,
+    "posit.from_f32": 0,
+    "posit.to_f32": 0
+   },
+   "ir_after_onnx_passes": {
+    "onnx.Round": 51,
+    "onnx.Div": 51,
+    "onnx.Cast": 76,
+    "posit.from_f32": 0,
+    "posit.to_f32": 0
+   },
+   "config": {
+    "node_Conv_809": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "int8"
+    },
+    "node_Conv_811": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_Conv_813": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "fp32"
+    },
+    "node_Conv_815": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "fp32"
+    },
+    "node_Conv_817": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "int8"
+    },
+    "node_Conv_819": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_Conv_821": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "fp32"
+    },
+    "node_Conv_823": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "fp32"
+    },
+    "node_Conv_825": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "f16"
+    },
+    "node_add": {
+     "op": "Add",
+     "w": null,
+     "a": "int8"
+    },
+    "node_Conv_827": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_Conv_829": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "int8"
+    },
+    "node_Conv_831": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "fp32"
+    },
+    "node_Conv_833": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "fp32"
+    },
+    "node_Conv_835": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "f16"
+    },
+    "node_Conv_837": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "fp32"
+    },
+    "node_add_1": {
+     "op": "Add",
+     "w": null,
+     "a": "f16"
+    },
+    "node_Conv_839": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "f16"
+    },
+    "node_Conv_841": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "fp32"
+    },
+    "node_Conv_843": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_add_2": {
+     "op": "Add",
+     "w": null,
+     "a": "fp32"
+    },
+    "node_Conv_845": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "f16"
+    },
+    "node_Conv_847": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_Conv_849": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_Conv_851": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "bf16"
+    },
+    "node_Conv_853": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_Conv_855": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_add_3": {
+     "op": "Add",
+     "w": null,
+     "a": "fp32"
+    },
+    "node_Conv_857": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "fp32"
+    },
+    "node_Conv_859": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "f16"
+    },
+    "node_Conv_861": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "bf16"
+    },
+    "node_add_4": {
+     "op": "Add",
+     "w": null,
+     "a": "int8"
+    },
+    "node_Conv_863": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_Conv_865": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "fp32"
+    },
+    "node_Conv_867": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_add_5": {
+     "op": "Add",
+     "w": null,
+     "a": "int8"
+    },
+    "node_Conv_869": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_Conv_871": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_Conv_873": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_Conv_875": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "int8"
+    },
+    "node_Conv_877": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_Conv_879": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "bf16"
+    },
+    "node_add_6": {
+     "op": "Add",
+     "w": null,
+     "a": "bf16"
+    },
+    "node_Conv_881": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "bf16"
+    },
+    "node_Conv_883": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "fp32"
+    },
+    "node_Conv_885": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_add_7": {
+     "op": "Add",
+     "w": null,
+     "a": "fp32"
+    },
+    "node_Conv_887": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "fp32"
+    },
+    "node_Conv_889": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "f16"
+    },
+    "node_Conv_891": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "fp32"
+    },
+    "node_Conv_893": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_Conv_895": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_Conv_897": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_add_8": {
+     "op": "Add",
+     "w": null,
+     "a": "int8"
+    },
+    "node_Conv_899": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_Conv_901": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "int8"
+    },
+    "node_Conv_903": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_add_9": {
+     "op": "Add",
+     "w": null,
+     "a": "int8"
+    },
+    "node_Conv_905": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "int8"
+    },
+    "node_Conv_907": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_Conv_909": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "f16"
+    },
+    "node_Conv_911": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_linear": {
+     "op": "Gemm",
+     "w": "f16",
+     "a": "bf16"
+    }
+   },
+   "node_formats_env": "node_Conv_809:w=f16:a=int8:0.018658447265625:-14:0.45323381610945157:-10,node_Conv_811:w=bf16:a=int8:0.023529411764705882:-128:0.4948614382276348:-7,node_Conv_813:w=fp32:a=fp32,node_Conv_815:w=fp32:a=fp32,node_Conv_817:w=f16:a=int8:0.023529411764705882:-128:0.13971862044988895:-9,node_Conv_819:w=fp32:a=int8:0.023529411764705882:-128:0.4509501438514859:9,node_Conv_821:w=fp32:a=fp32,node_Conv_823:w=int8:a=fp32,node_Conv_825:w=bf16:a=f16,node_add:a=int8:0.5112355849322151:18:0.4509501438514859:9:0.49552378934972424:11,node_Conv_827:w=bf16:a=int8:0.49552378934972424:11:0.1876066245284735:9,node_Conv_829:w=int8:a=int8:0.023529411764705882:-128:0.11784756978352864:20,node_Conv_831:w=int8:a=fp32,node_Conv_833:w=f16:a=fp32,node_Conv_835:w=int8:a=f16,node_Conv_837:w=fp32:a=fp32,node_add_1:a=f16,node_Conv_839:w=bf16:a=f16,node_Conv_841:w=f16:a=fp32,node_Conv_843:w=bf16:a=int8:0.023529411764705882:-128:0.2278657875809015:-11,node_add_2:a=fp32,node_Conv_845:w=int8:a=f16,node_Conv_847:w=bf16:a=int8:0.023529411764705882:-128:0.11854887569651884:3,node_Conv_849:w=bf16:a=fp32,node_Conv_851:w=f16:a=bf16,node_Conv_853:w=bf16:a=fp32,node_Conv_855:w=fp32:a=int8:0.023529411764705882:-128:0.2051129659016927:9,node_add_3:a=fp32,node_Conv_857:w=f16:a=fp32,node_Conv_859:w=fp32:a=f16,node_Conv_861:w=bf16:a=bf16,node_add_4:a=int8:0.14358490588618258:9:0.3175086526309743:-16:0.34668263454063264:-12,node_Conv_863:w=fp32:a=int8:0.34668263454063264:-12:0.08151853972790288:-5,node_Conv_865:w=f16:a=fp32,node_Conv_867:w=bf16:a=fp32,node_add_5:a=int8:0.12019345152611825:-11:0.34668263454063264:-12:0.35589855418485755:-5,node_Conv_869:w=fp32:a=int8:0.35589855418485755:-5:0.10670440898222082:-16,node_Conv_871:w=bf16:a=fp32,node_Conv_873:w=f16:a=f16,node_Conv_875:w=f16:a=int8:0.29608664419136793:-2:0.09735143324908088:-18,node_Conv_877:w=f16:a=f16,node_Conv_879:w=fp32:a=bf16,node_add_6:a=bf16,node_Conv_881:w=fp32:a=bf16,node_Conv_883:w=int8:a=fp32,node_Conv_885:w=f16:a=f16,node_add_7:a=fp32,node_Conv_887:w=int8:a=fp32,node_Conv_889:w=bf16:a=f16,node_Conv_891:w=fp32:a=fp32,node_Conv_893:w=bf16:a=fp32,node_Conv_895:w=bf16:a=int8:0.023529411764705882:-128:0.12366225298713235:13,node_Conv_897:w=bf16:a=fp32,node_add_8:a=int8:0.16841889923694087:-6:0.25113900128532857:9:0.24901652616613051:7,node_Conv_899:w=f16:a=f16,node_Conv_901:w=f16:a=int8:0.023529411764705882:-128:0.09546558155732997:31,node_Conv_903:w=bf16:a=int8:0.023529411764705882:-128:0.12422088922238818:30,node_add_9:a=int8:0.12422088922238818:30:0.24901652616613051:7:0.2779951058182062:4,node_Conv_905:w=int8:a=int8:0.2779951058182062:4:0.1057757396324008:-28,node_Conv_907:w=fp32:a=int8:0.023529411764705882:-128:0.3284157996084176:18,node_Conv_909:w=bf16:a=f16,node_Conv_911:w=bf16:a=int8:0.1432273789948108:-11:0.21807695276596967:26,node_linear:w=f16:a=bf16",
+   "vs_onnxruntime_simulation": {
+    "max_abs_diff": 0.46875,
+    "mean_abs_diff": 0.05787835270166397,
+    "same_top1": 100,
+    "simulated_top1": 0.75
+   },
+   "site_check": {
+    "int": {
+     "expected": 51,
+     "found": 51
+    },
+    "half(cast pairs)": {
+     "expected": 76,
+     "found": 76
+    },
+    "posit from_f32": {
+     "expected": 0,
+     "found": 0
+    },
+    "posit to_f32": {
+     "expected": 0,
+     "found": 0
+    }
+   },
+   "sites_match": true,
+   "qdq_survived_onnx_passes": true
+  },
+  "random_seed2": {
+   "all": {
+    "n": 100,
+    "top1": 0.76,
+    "top5": 0.94,
+    "top1_correct": 76,
+    "top5_correct": 94
+   },
+   "calibration": {
+    "n": 10,
+    "top1": 0.6,
+    "top5": 0.9,
+    "top1_correct": 6,
+    "top5_correct": 9
+   },
+   "held_out": {
+    "n": 90,
+    "top1": 0.7777777777777778,
+    "top5": 0.9444444444444444,
+    "top1_correct": 70,
+    "top5_correct": 85
+   },
+   "non_finite_rows": 0,
+   "same_top1_as_fp32": 90,
+   "max_abs_logit_diff_vs_fp32": 5.819982051849365,
+   "mean_abs_logit_diff_vs_fp32": 0.35795867443084717,
+   "compile_seconds": 10.78089714050293,
+   "run_seconds_per_image": 0.06968024730682373,
+   "peak_rss_gb": 0.11359405517578125,
+   "steps": {
+    "mixed_pass": 0.27800488471984863,
+    "onnx_level": 0.4636192321777344,
+    "to_krnl": 0.1464378833770752,
+    "to_llvm": 1.0818264484405518,
+    "translate": 0.3918135166168213,
+    "link": 8.036586284637451
+   },
+   "warnings": [],
+   "ir_after_pass": {
+    "onnx.Round": 32,
+    "onnx.Div": 32,
+    "onnx.Cast": 150,
+    "posit.from_f32": 0,
+    "posit.to_f32": 0
+   },
+   "ir_after_onnx_passes": {
+    "onnx.Round": 32,
+    "onnx.Div": 32,
+    "onnx.Cast": 150,
+    "posit.from_f32": 0,
+    "posit.to_f32": 0
+   },
+   "config": {
+    "node_Conv_809": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "int8"
+    },
+    "node_Conv_811": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "bf16"
+    },
+    "node_Conv_813": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "bf16"
+    },
+    "node_Conv_815": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "f16"
+    },
+    "node_Conv_817": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "f16"
+    },
+    "node_Conv_819": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "fp32"
+    },
+    "node_Conv_821": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_Conv_823": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_Conv_825": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "bf16"
+    },
+    "node_add": {
+     "op": "Add",
+     "w": null,
+     "a": "fp32"
+    },
+    "node_Conv_827": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_Conv_829": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "f16"
+    },
+    "node_Conv_831": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_Conv_833": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "int8"
+    },
+    "node_Conv_835": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "bf16"
+    },
+    "node_Conv_837": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_add_1": {
+     "op": "Add",
+     "w": null,
+     "a": "bf16"
+    },
+    "node_Conv_839": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "fp32"
+    },
+    "node_Conv_841": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "bf16"
+    },
+    "node_Conv_843": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "bf16"
+    },
+    "node_add_2": {
+     "op": "Add",
+     "w": null,
+     "a": "fp32"
+    },
+    "node_Conv_845": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "fp32"
+    },
+    "node_Conv_847": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "f16"
+    },
+    "node_Conv_849": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "bf16"
+    },
+    "node_Conv_851": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "bf16"
+    },
+    "node_Conv_853": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "fp32"
+    },
+    "node_Conv_855": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_add_3": {
+     "op": "Add",
+     "w": null,
+     "a": "fp32"
+    },
+    "node_Conv_857": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "bf16"
+    },
+    "node_Conv_859": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "bf16"
+    },
+    "node_Conv_861": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "bf16"
+    },
+    "node_add_4": {
+     "op": "Add",
+     "w": null,
+     "a": "bf16"
+    },
+    "node_Conv_863": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "bf16"
+    },
+    "node_Conv_865": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "fp32"
+    },
+    "node_Conv_867": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_add_5": {
+     "op": "Add",
+     "w": null,
+     "a": "bf16"
+    },
+    "node_Conv_869": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "f16"
+    },
+    "node_Conv_871": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "int8"
+    },
+    "node_Conv_873": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "bf16"
+    },
+    "node_Conv_875": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "int8"
+    },
+    "node_Conv_877": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "bf16"
+    },
+    "node_Conv_879": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_add_6": {
+     "op": "Add",
+     "w": null,
+     "a": "int8"
+    },
+    "node_Conv_881": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_Conv_883": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "bf16"
+    },
+    "node_Conv_885": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "f16"
+    },
+    "node_add_7": {
+     "op": "Add",
+     "w": null,
+     "a": "f16"
+    },
+    "node_Conv_887": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "int8"
+    },
+    "node_Conv_889": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "int8"
+    },
+    "node_Conv_891": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "int8"
+    },
+    "node_Conv_893": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "bf16"
+    },
+    "node_Conv_895": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "f16"
+    },
+    "node_Conv_897": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_add_8": {
+     "op": "Add",
+     "w": null,
+     "a": "int8"
+    },
+    "node_Conv_899": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_Conv_901": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_Conv_903": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "int8"
+    },
+    "node_add_9": {
+     "op": "Add",
+     "w": null,
+     "a": "bf16"
+    },
+    "node_Conv_905": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "bf16"
+    },
+    "node_Conv_907": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_Conv_909": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "bf16"
+    },
+    "node_Conv_911": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_linear": {
+     "op": "Gemm",
+     "w": "bf16",
+     "a": "fp32"
+    }
+   },
+   "node_formats_env": "node_Conv_809:w=int8:a=int8:0.018658447265625:-14:0.45323381610945157:-10,node_Conv_811:w=int8:a=bf16,node_Conv_813:w=f16:a=bf16,node_Conv_815:w=bf16:a=f16,node_Conv_817:w=int8:a=f16,node_Conv_819:w=fp32:a=fp32,node_Conv_821:w=bf16:a=fp32,node_Conv_823:w=bf16:a=int8:0.023529411764705882:-128:0.1557597141639859:-18,node_Conv_825:w=int8:a=bf16,node_add:a=fp32,node_Conv_827:w=bf16:a=fp32,node_Conv_829:w=fp32:a=f16,node_Conv_831:w=f16:a=f16,node_Conv_833:w=f16:a=int8:0.34180137783873316:8:0.16056281445073148:9,node_Conv_835:w=f16:a=bf16,node_Conv_837:w=f16:a=f16,node_add_1:a=bf16,node_Conv_839:w=f16:a=fp32,node_Conv_841:w=fp32:a=bf16,node_Conv_843:w=bf16:a=bf16,node_add_2:a=fp32,node_Conv_845:w=f16:a=fp32,node_Conv_847:w=fp32:a=f16,node_Conv_849:w=fp32:a=bf16,node_Conv_851:w=fp32:a=bf16,node_Conv_853:w=fp32:a=fp32,node_Conv_855:w=bf16:a=fp32,node_add_3:a=fp32,node_Conv_857:w=f16:a=bf16,node_Conv_859:w=f16:a=bf16,node_Conv_861:w=fp32:a=bf16,node_add_4:a=bf16,node_Conv_863:w=fp32:a=bf16,node_Conv_865:w=f16:a=fp32,node_Conv_867:w=bf16:a=int8:0.023529411764705882:-128:0.12019345152611825:-11,node_add_5:a=bf16,node_Conv_869:w=int8:a=f16,node_Conv_871:w=int8:a=int8:0.023529411764705882:-128:0.20242469638001684:4,node_Conv_873:w=int8:a=bf16,node_Conv_875:w=f16:a=int8:0.29608664419136793:-2:0.09735143324908088:-18,node_Conv_877:w=f16:a=bf16,node_Conv_879:w=f16:a=f16,node_add_6:a=int8:0.15528710309196922:25:0.29608664419136793:-2:0.2989342633415671:-6,node_Conv_881:w=fp32:a=int8:0.2989342633415671:-6:0.09467198988970588:1,node_Conv_883:w=int8:a=bf16,node_Conv_885:w=bf16:a=f16,node_add_7:a=f16,node_Conv_887:w=int8:a=int8:0.32933883666992186:4:0.13362751381070007:2,node_Conv_889:w=int8:a=int8:0.023529411764705882:-128:0.11314866309072458:-40,node_Conv_891:w=int8:a=int8:0.023529411764705882:-128:0.25113900128532857:9,node_Conv_893:w=int8:a=bf16,node_Conv_895:w=bf16:a=f16,node_Conv_897:w=f16:a=f16,node_add_8:a=int8:0.16841889923694087:-6:0.25113900128532857:9:0.24901652616613051:7,node_Conv_899:w=fp32:a=int8:0.24901652616613051:7:0.13417084263820275:-39,node_Conv_901:w=f16:a=f16,node_Conv_903:w=int8:a=int8:0.023529411764705882:-128:0.12422088922238818:30,node_add_9:a=bf16,node_Conv_905:w=int8:a=bf16,node_Conv_907:w=bf16:a=fp32,node_Conv_909:w=int8:a=bf16,node_Conv_911:w=fp32:a=int8:0.1432273789948108:-11:0.21807695276596967:26,node_linear:w=bf16:a=fp32",
+   "vs_onnxruntime_simulation": {
+    "max_abs_diff": 0.5059554576873779,
+    "mean_abs_diff": 0.051187872886657715,
+    "same_top1": 97,
+    "simulated_top1": 0.77
+   },
+   "site_check": {
+    "int": {
+     "expected": 32,
+     "found": 32
+    },
+    "half(cast pairs)": {
+     "expected": 150,
+     "found": 150
+    },
+    "posit from_f32": {
+     "expected": 0,
+     "found": 0
+    },
+    "posit to_f32": {
+     "expected": 0,
+     "found": 0
+    }
+   },
+   "sites_match": true,
+   "qdq_survived_onnx_passes": true
+  },
+  "random_seed0": {
+   "all": {
+    "n": 100,
+    "top1": 0.78,
+    "top5": 0.93,
+    "top1_correct": 78,
+    "top5_correct": 93
+   },
+   "calibration": {
+    "n": 10,
+    "top1": 0.7,
+    "top5": 0.8,
+    "top1_correct": 7,
+    "top5_correct": 8
+   },
+   "held_out": {
+    "n": 90,
+    "top1": 0.7888888888888889,
+    "top5": 0.9444444444444444,
+    "top1_correct": 71,
+    "top5_correct": 85
+   },
+   "non_finite_rows": 0,
+   "same_top1_as_fp32": 95,
+   "max_abs_logit_diff_vs_fp32": 4.689581871032715,
+   "mean_abs_logit_diff_vs_fp32": 0.2185337245464325,
+   "compile_seconds": 11.629555225372314,
+   "run_seconds_per_image": 0.06566055297851563,
+   "peak_rss_gb": 0.11293792724609375,
+   "steps": {
+    "mixed_pass": 0.35752177238464355,
+    "onnx_level": 0.35564470291137695,
+    "to_krnl": 0.1611461639404297,
+    "to_llvm": 1.1472387313842773,
+    "translate": 0.4201662540435791,
+    "link": 8.675422430038452
+   },
+   "warnings": [],
+   "ir_after_pass": {
+    "onnx.Round": 51,
+    "onnx.Div": 51,
+    "onnx.Cast": 120,
+    "posit.from_f32": 0,
+    "posit.to_f32": 0
+   },
+   "ir_after_onnx_passes": {
+    "onnx.Round": 51,
+    "onnx.Div": 51,
+    "onnx.Cast": 120,
+    "posit.from_f32": 0,
+    "posit.to_f32": 0
+   },
+   "config": {
+    "node_Conv_809": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "fp32"
+    },
+    "node_Conv_811": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "bf16"
+    },
+    "node_Conv_813": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "fp32"
+    },
+    "node_Conv_815": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_Conv_817": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "f16"
+    },
+    "node_Conv_819": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "bf16"
+    },
+    "node_Conv_821": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "int8"
+    },
+    "node_Conv_823": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "f16"
+    },
+    "node_Conv_825": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_add": {
+     "op": "Add",
+     "w": null,
+     "a": "int8"
+    },
+    "node_Conv_827": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_Conv_829": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "bf16"
+    },
+    "node_Conv_831": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "bf16"
+    },
+    "node_Conv_833": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "fp32"
+    },
+    "node_Conv_835": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "bf16"
+    },
+    "node_Conv_837": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "int8"
+    },
+    "node_add_1": {
+     "op": "Add",
+     "w": null,
+     "a": "int8"
+    },
+    "node_Conv_839": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_Conv_841": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "bf16"
+    },
+    "node_Conv_843": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "bf16"
+    },
+    "node_add_2": {
+     "op": "Add",
+     "w": null,
+     "a": "int8"
+    },
+    "node_Conv_845": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_Conv_847": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_Conv_849": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_Conv_851": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "bf16"
+    },
+    "node_Conv_853": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_Conv_855": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "bf16"
+    },
+    "node_add_3": {
+     "op": "Add",
+     "w": null,
+     "a": "int8"
+    },
+    "node_Conv_857": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "f16"
+    },
+    "node_Conv_859": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "fp32"
+    },
+    "node_Conv_861": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "fp32"
+    },
+    "node_add_4": {
+     "op": "Add",
+     "w": null,
+     "a": "bf16"
+    },
+    "node_Conv_863": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "bf16"
+    },
+    "node_Conv_865": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_Conv_867": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "int8"
+    },
+    "node_add_5": {
+     "op": "Add",
+     "w": null,
+     "a": "bf16"
+    },
+    "node_Conv_869": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_Conv_871": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "f16"
+    },
+    "node_Conv_873": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "int8"
+    },
+    "node_Conv_875": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "fp32"
+    },
+    "node_Conv_877": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "f16"
+    },
+    "node_Conv_879": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "fp32"
+    },
+    "node_add_6": {
+     "op": "Add",
+     "w": null,
+     "a": "bf16"
+    },
+    "node_Conv_881": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "fp32"
+    },
+    "node_Conv_883": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_Conv_885": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_add_7": {
+     "op": "Add",
+     "w": null,
+     "a": "fp32"
+    },
+    "node_Conv_887": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "f16"
+    },
+    "node_Conv_889": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "int8"
+    },
+    "node_Conv_891": {
+     "op": "Conv",
+     "w": "bf16",
+     "a": "int8"
+    },
+    "node_Conv_893": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "bf16"
+    },
+    "node_Conv_895": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "bf16"
+    },
+    "node_Conv_897": {
+     "op": "Conv",
+     "w": "fp32",
+     "a": "int8"
+    },
+    "node_add_8": {
+     "op": "Add",
+     "w": null,
+     "a": "int8"
+    },
+    "node_Conv_899": {
+     "op": "Conv",
+     "w": "f16",
+     "a": "f16"
+    },
+    "node_Conv_901": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "int8"
+    },
+    "node_Conv_903": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "int8"
+    },
+    "node_add_9": {
+     "op": "Add",
+     "w": null,
+     "a": "f16"
+    },
+    "node_Conv_905": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "fp32"
+    },
+    "node_Conv_907": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "bf16"
+    },
+    "node_Conv_909": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "int8"
+    },
+    "node_Conv_911": {
+     "op": "Conv",
+     "w": "int8",
+     "a": "f16"
+    },
+    "node_linear": {
+     "op": "Gemm",
+     "w": "f16",
+     "a": "int8"
+    }
+   },
+   "node_formats_env": "node_Conv_809:w=fp32:a=fp32,node_Conv_811:w=int8:a=bf16,node_Conv_813:w=fp32:a=fp32,node_Conv_815:w=bf16:a=fp32,node_Conv_817:w=bf16:a=f16,node_Conv_819:w=f16:a=bf16,node_Conv_821:w=f16:a=int8:0.4509501438514859:9:0.2110931770474303:22,node_Conv_823:w=bf16:a=f16,node_Conv_825:w=bf16:a=int8:0.023529411764705882:-128:0.5112355849322151:18,node_add:a=int8:0.5112355849322151:18:0.4509501438514859:9:0.49552378934972424:11,node_Conv_827:w=bf16:a=fp32,node_Conv_829:w=int8:a=bf16,node_Conv_831:w=fp32:a=bf16,node_Conv_833:w=f16:a=fp32,node_Conv_835:w=fp32:a=bf16,node_Conv_837:w=int8:a=int8:0.023529411764705882:-128:0.28178066178864125:-6,node_add_1:a=int8:0.28178066178864125:-6:0.34180137783873316:8:0.41689493515912224:-7,node_Conv_839:w=fp32:a=int8:0.41689493515912224:-7:0.12884519240435433:-18,node_Conv_841:w=fp32:a=bf16,node_Conv_843:w=f16:a=bf16,node_add_2:a=int8:0.2278657875809015:-11:0.41689493515912224:-7:0.4791499418370864:3,node_Conv_845:w=f16:a=f16,node_Conv_847:w=f16:a=f16,node_Conv_849:w=fp32:a=int8:0.023529411764705882:-128:0.3162996778301164:-14,node_Conv_851:w=int8:a=bf16,node_Conv_853:w=fp32:a=int8:0.023529411764705882:-128:0.17547573014801623:33,node_Conv_855:w=bf16:a=bf16,node_add_3:a=int8:0.2051129659016927:9:0.3162996778301164:-14:0.3175086526309743:-16,node_Conv_857:w=bf16:a=f16,node_Conv_859:w=bf16:a=fp32,node_Conv_861:w=int8:a=fp32,node_add_4:a=bf16,node_Conv_863:w=f16:a=bf16,node_Conv_865:w=f16:a=f16,node_Conv_867:w=f16:a=int8:0.023529411764705882:-128:0.12019345152611825:-11,node_add_5:a=bf16,node_Conv_869:w=fp32:a=int8:0.35589855418485755:-5:0.10670440898222082:-16,node_Conv_871:w=int8:a=f16,node_Conv_873:w=f16:a=int8:0.023529411764705882:-128:0.29608664419136793:-2,node_Conv_875:w=int8:a=fp32,node_Conv_877:w=bf16:a=f16,node_Conv_879:w=f16:a=fp32,node_add_6:a=bf16,node_Conv_881:w=fp32:a=fp32,node_Conv_883:w=bf16:a=int8:0.023529411764705882:-128:0.11106171701468673:5,node_Conv_885:w=bf16:a=int8:0.023529411764705882:-128:0.13275117313160617:8,node_add_7:a=fp32,node_Conv_887:w=bf16:a=f16,node_Conv_889:w=f16:a=int8:0.023529411764705882:-128:0.11314866309072458:-40,node_Conv_891:w=bf16:a=int8:0.023529411764705882:-128:0.25113900128532857:9,node_Conv_893:w=f16:a=bf16,node_Conv_895:w=f16:a=bf16,node_Conv_897:w=fp32:a=int8:0.023529411764705882:-128:0.16841889923694087:-6,node_add_8:a=int8:0.16841889923694087:-6:0.25113900128532857:9:0.24901652616613051:7,node_Conv_899:w=f16:a=f16,node_Conv_901:w=int8:a=int8:0.023529411764705882:-128:0.09546558155732997:31,node_Conv_903:w=int8:a=int8:0.023529411764705882:-128:0.12422088922238818:30,node_add_9:a=f16,node_Conv_905:w=int8:a=fp32,node_Conv_907:w=int8:a=bf16,node_Conv_909:w=int8:a=int8:0.023529411764705882:-128:0.1432273789948108:-11,node_Conv_911:w=int8:a=f16,node_linear:w=f16:a=int8:0.021971592248654834:-128:0.06534215702730066:-59",
+   "vs_onnxruntime_simulation": {
+    "max_abs_diff": 0.3920530080795288,
+    "mean_abs_diff": 0.04316895455121994,
+    "same_top1": 98,
+    "simulated_top1": 0.78
+   },
+   "site_check": {
+    "int": {
+     "expected": 51,
+     "found": 51
+    },
+    "half(cast pairs)": {
+     "expected": 120,
+     "found": 120
+    },
+    "posit from_f32": {
+     "expected": 0,
+     "found": 0
+    },
+    "posit to_f32": {
+     "expected": 0,
+     "found": 0
+    }
+   },
+   "sites_match": true,
+   "qdq_survived_onnx_passes": true
+  }
+ },
+ "references": {
+  "torch_fp32 (reference)": {
+   "all": {
+    "n": 100,
+    "top1": 0.81,
+    "top5": 0.95,
+    "top1_correct": 81,
+    "top5_correct": 95
+   },
+   "calibration": {
+    "n": 10,
+    "top1": 0.7,
+    "top5": 0.9,
+    "top1_correct": 7,
+    "top5_correct": 9
+   },
+   "held_out": {
+    "n": 90,
+    "top1": 0.8222222222222222,
+    "top5": 0.9555555555555556,
+    "top1_correct": 74,
+    "top5_correct": 86
+   },
+   "non_finite_rows": 0
+  },
+  "onnxruntime_fp32 (reference)": {
+   "all": {
+    "n": 100,
+    "top1": 0.81,
+    "top5": 0.95,
+    "top1_correct": 81,
+    "top5_correct": 95
+   },
+   "calibration": {
+    "n": 10,
+    "top1": 0.7,
+    "top5": 0.9,
+    "top1_correct": 7,
+    "top5_correct": 9
+   },
+   "held_out": {
+    "n": 90,
+    "top1": 0.8222222222222222,
+    "top5": 0.9555555555555556,
+    "top1_correct": 74,
+    "top5_correct": 86
+   },
+   "non_finite_rows": 0
+  }
+ },
+ "wall_seconds": 54.07058095932007
+}

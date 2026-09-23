@@ -58,4 +58,8 @@ target_link_libraries(onnx-mlir-opt PUBLIC
   OMONNXToLowPrecision   # BF16/F16/INT8/FP8 per-layer formats
 )
 
+target_link_libraries(onnx-mlir-opt PUBLIC
+  OMONNXToMixedPrecision   # weight/activation-separated QDQ mixed precision
+)
+
 message(STATUS "test run this cmake")

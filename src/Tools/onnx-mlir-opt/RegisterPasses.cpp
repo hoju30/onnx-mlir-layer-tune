@@ -266,6 +266,10 @@ void registerOMPasses(int optLevel) {
     return createConvertONNXToLowPrecisionPass();
   });
 
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createConvertONNXToMixedPrecisionPass();
+  });
+
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createProcessScfParallelPrivatePass();
