@@ -149,14 +149,14 @@ class Tools:
             sys.exit("PyRuntimeC not built (ninja PyRuntimeC)")
 
 
-def run(cmd, env=None, timeout=900):
+def run(cmd, env=None, timeout=900, cwd=None):
     """Every compiler step gets a hard timeout: lowp_lower_general.py documents a
     MobileNetV2 configuration where convert-krnl-to-llvm never returned."""
     e = dict(os.environ)
     e.update(env or {})
     t0 = time.time()
     try:
-        r = subprocess.run([str(c) for c in cmd], env=e, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run([str(c) for c in cmd], env=e, capture_output=True, text=True, timeout=timeout, cwd=cwd)
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"TIMEOUT after {timeout}s: {' '.join(str(c) for c in cmd)[:300]}")
     if r.returncode != 0:
@@ -214,6 +214,31 @@ def preprocess_all(img_dir, manifest, model_meta):
         with Image.open(img_dir / e["file"]) as im:
             xs.append(tf(im.convert("RGB")).numpy())
     return np.ascontiguousarray(np.stack(xs), dtype=np.float32)
+
+
+def preprocess_torchvision(img_dir, manifest, meta):
+    """Standard ImageNet eval transform (Resize(256) -> CenterCrop(224) ->
+    Normalize), for models this repo sourced from torchvision rather than timm
+    -- preprocess_all()'s timm transform needs a timm pretrained_cfg, which a
+    torchvision-sourced model's metadata.json doesn't have (model_meta.get()
+    would silently fall back to timm's generic default instead of this
+    checkpoint's actual eval recipe)."""
+    from PIL import Image
+    from torchvision import transforms
+    tf = transforms.Compose([
+        transforms.Resize(256), transforms.CenterCrop(224), transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    xs = []
+    for e in manifest["images"]:
+        with Image.open(img_dir / e["file"]) as im:
+            xs.append(tf(im.convert("RGB")).numpy())
+    return np.ascontiguousarray(np.stack(xs), dtype=np.float32)
+
+
+def preprocess_by_source(img_dir, manifest, meta):
+    return (preprocess_all(img_dir, manifest, meta) if meta.get("source") == "timm"
+            else preprocess_torchvision(img_dir, manifest, meta))
 
 
 # --------------------------------------------------------------------------- #
@@ -351,12 +376,35 @@ def ir_stats(text):
     return {"onnx.Round": len(re.findall(r'"onnx\.Round"', text)),
             "onnx.Div": len(re.findall(r'"onnx\.Div"', text)),
             "onnx.Cast": len(re.findall(r'"onnx\.Cast"', text)),
+            "posit.round_f32": len(re.findall(r"posit\.round_f32", text)),
             "posit.from_f32": len(re.findall(r"posit\.from_f32", text)),
             "posit.to_f32": len(re.findall(r"posit\.to_f32", text))}
 
 
-def build_so(tools, work, tag, base_mlir, node_formats, posit_obj):
-    """node_formats=None -> plain FP32 build without the pass."""
+def set_symbol_postfix(mlir_path, postfix):
+    """Rename the module's onnx-mlir symbol postfix, in place. Every .so built from the same imported model exports
+    main_graph_<postfix>, run_main_graph_<postfix>, ...; loaded into one process, the second binds the first one's
+    main_graph and silently computes the wrong graph. A distinct postfix per .so avoids that; load it with
+    OMExecutionSession(so, postfix)."""
+    p = Path(mlir_path)
+    text = p.read_text()
+    old = f'"onnx-mlir.symbol-postfix" = "{SYMBOL_POSTFIX}"'
+    if old not in text:
+        raise ValueError(f"{p}: no {old}")
+    p.write_text(text.replace(old, f'"onnx-mlir.symbol-postfix" = "{postfix}"', 1))
+
+
+def build_so(tools, work, tag, base_mlir, node_formats, posit_obj, uses_posit=None, uses_f16=None, opt="O3",
+             constants_to_file=False, krnl_opt=None):
+    """node_formats=None -> plain FP32 build without the pass. uses_posit / uses_f16 override what is otherwise read
+    off node_formats (needed for graphs whose posit / f16 QDQ does not come from it, e.g. --mixedp-collect-stats).
+    opt is the optimization level of both the Krnl lowering and clang (O3 for evaluated models; the very large
+    statistics graphs compile much faster at a lower level); krnl_opt, if given, overrides it for the Krnl lowering
+    alone (-O3 there tiles / vectorizes MatMul, which clang's level does not recover).
+    constants_to_file: --convert-krnl-to-llvm writes every constant over 1 KB to <work>/model.constants.bin instead
+    of the .ll, so translation and clang only see code (GPT-2's .ll otherwise holds ~1.3 GB of weights as text). The
+    .so then mmaps that file from OM_CONSTANT_PATH, which OMExecutionSession sets to the .so's folder -- once per
+    process: give every such build its own `work` folder and load at most one such .so per process."""
     steps, warnings, stats = {}, [], None
     src = base_mlir
     if node_formats is not None:
@@ -365,22 +413,35 @@ def build_so(tools, work, tag, base_mlir, node_formats, posit_obj):
                                       "-o", src], env={"MIXEDP_NODE_FORMATS": node_formats})
         warnings = [l for l in r.stderr.splitlines() if "warning" in l.lower()]
         stats = ir_stats(src.read_text())
-    uses_posit = node_formats is not None and re.search(r"=p\d+e\d+", node_formats) is not None
+    if uses_posit is None:
+        uses_posit = node_formats is not None and re.search(r"=p\d+e\d+", node_formats) is not None
     onnxir, krnl, llvm = (work / f"{tag}.{x}.mlir" for x in ("onnxir", "krnl", "llvm"))
     ll, so = work / f"{tag}.ll", work / f"{tag}.so"
     _, steps["onnx_level"] = run([tools.opt, src, *ONNX_LEVEL_PASSES, "-o", onnxir])
     stats_after = ir_stats(onnxir.read_text()) if node_formats is not None else None
-    _, steps["to_krnl"] = run([tools.opt, onnxir, "--canonicalize", "--shape-inference", "--O3",
+    _, steps["to_krnl"] = run([tools.opt, onnxir, "--canonicalize", "--shape-inference", f"--{krnl_opt or opt}",
                                "--convert-onnx-to-krnl", *(["--convert-posit-to-krnl"] if uses_posit else []),
                                "--canonicalize", "-o", krnl])
-    _, steps["to_llvm"] = run([tools.opt, krnl, *KRNL_TO_LLVM_PASSES, "-o", llvm])
+    if constants_to_file:       # the pass writes ./model.constants.bin: run it inside `work`, with absolute paths
+        to_llvm = [p if p != "--convert-krnl-to-llvm" else
+                   "--convert-krnl-to-llvm=store-constants-to-file=true constants-to-file-single-threshold=1 "
+                   "constants-to-file-total-threshold=0" for p in KRNL_TO_LLVM_PASSES]
+        _, steps["to_llvm"] = run([tools.opt, Path(krnl).resolve(), *to_llvm, "-o", Path(llvm).resolve()],
+                                  cwd=work)
+    else:
+        _, steps["to_llvm"] = run([tools.opt, krnl, *KRNL_TO_LLVM_PASSES, "-o", llvm])
     _, steps["translate"] = run([tools.translate, "--mlir-to-llvmir", llvm, "-o", ll])
-    uses_f16 = node_formats is not None and re.search(r"a=f16(?=[:,]|$)", node_formats) is not None
+    if ll.stat().st_size > 1_500_000_000:    # clang rejects textual inputs over 2 GiB: hand it bitcode instead
+        bc = work / f"{tag}.bc"
+        _, steps["llvm_as"] = run([tools.translate.parent / "llvm-as", ll, "-o", bc])
+        ll = bc
+    if uses_f16 is None:
+        uses_f16 = node_formats is not None and re.search(r"a=f16(?=[:,]|$)", node_formats) is not None
     if uses_f16 and not HAS_F16C:
         raise RuntimeError("f16 activations need a CPU with F16C: without it the generated code calls the "
                            "ABI-mismatched __truncsfhf2/__extendhfsf2 of libcruntime.a and returns garbage")
-    link = [tools.clangxx, "-std=c++20", "-O3", "-fPIC", "-shared", *(["-mf16c"] if uses_f16 else []), ll] + \
-           ([posit_obj] if uses_posit else []) + [tools.cruntime, "-o", so]
+    link = [tools.clangxx, "-std=c++20", f"-{opt}", "-fPIC", "-shared", *(["-mf16c"] if uses_f16 else []), ll] + \
+           ([posit_obj] if uses_posit and posit_obj else []) + [tools.cruntime, "-o", so]
     _, steps["link"] = run(link)
     return so, {"steps": steps, "warnings": warnings, "ir_after_pass": stats, "ir_after_onnx_passes": stats_after}
 
@@ -435,10 +496,14 @@ def fmt_acc(a):
 
 
 def torch_reference(meta, inputs):
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    import timm
     import torch
-    model = timm.create_model(meta["timm_model"], pretrained=True).eval()
+    if meta.get("source") == "timm":
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        import timm
+        model = timm.create_model(meta["timm_model"], pretrained=True).eval()
+    else:
+        import torchvision.models as tv_models
+        model = tv_models.get_model(meta["torchvision_model"], weights=meta["torchvision_weights"]).eval()
     with torch.no_grad():
         return torch.cat([model(torch.from_numpy(inputs[i:i + 25])) for i in range(0, len(inputs), 25)]).numpy()
 
@@ -652,6 +717,9 @@ def main():
                     help="also run every non-fp32 format applied to ALL weights (activations fp32) and to ALL "
                          "activations (weights fp32): shows which formats this model tolerates at all")
     ap.add_argument("--sweep-formats", default=None, help="formats for --uniform-sweep (default: all except fp32)")
+    ap.add_argument("--htq-configs", type=Path, default=None,
+                    help="sample_configs_htq.py output JSON: evaluate its SNIP-sensitivity-guided "
+                         "Pareto configs as additional variants, same as random_seed*/uniform_*")
     ap.add_argument("--jobs", type=int, default=1,
                     help="variants compiled+evaluated in parallel (a run can need >10GB RAM: keep it small)")
     ap.add_argument("--out-dir", type=Path, default=None,
@@ -691,7 +759,7 @@ def main():
         manifest = prepare_images(images_dir, parquet, args.num_images, args.num_calibration, args.data_seed)
         labels = np.array([e["label"] for e in manifest["images"]])
         calib_mask = np.array([e["calibration"] for e in manifest["images"]])
-        inputs = preprocess_all(images_dir, manifest, meta)
+        inputs = preprocess_by_source(images_dir, manifest, meta)
         inputs_path = work / "inputs.npy"
         np.save(inputs_path, inputs)
         log(f"images: {len(labels)} ImageNet-1k validation images ({len(set(labels.tolist()))} distinct classes), "
@@ -770,8 +838,9 @@ def main():
             if cfg is not None:
                 exp, ir = expected_sites(cfg, nodes), s["ir_after_pass"]
                 checks = {"int": (exp["int"], ir["onnx.Round"]), "half(cast pairs)": (exp["half"] * 2, ir["onnx.Cast"]),
-                          "posit from_f32": (exp["posit"], ir["posit.from_f32"]),
-                          "posit to_f32": (exp["posit"], ir["posit.to_f32"])}
+                          # one posit.round_f32 per site, or a from_f32/to_f32 pair under MIXEDP_POSIT_ACTIVATION=runtime
+                          "posit": (exp["posit"], ir["posit.round_f32"] + ir["posit.from_f32"]),
+                          "posit to_f32 pairs": (ir["posit.from_f32"], ir["posit.to_f32"])}
                 s["site_check"] = {k: {"expected": e, "found": f} for k, (e, f) in checks.items()}
                 s["sites_match"] = all(e == f for e, f in checks.values())
                 after = s["ir_after_onnx_passes"]
@@ -796,6 +865,10 @@ def main():
                     else [x for x in FORMATS if x != "fp32"]:
                 variants += [(f"uniform_w_{f}", uniform_config(nodes, f, "fp32")),
                              (f"uniform_a_{f}", uniform_config(nodes, "fp32", f))]
+        if args.htq_configs:
+            htq_cfgs = json.loads(args.htq_configs.read_text())["configs"]
+            variants += [(c["id"], c["formats"]) for c in htq_cfgs]
+            log(f"loaded {len(htq_cfgs)} HTQ Pareto configs from {args.htq_configs}")
         for name, cfg in variants:
             if name.startswith("random_seed"):
                 (out / f"{name}.node_formats.txt").write_text(node_formats_env(cfg, nodes, ranges) + "\n")
@@ -822,7 +895,7 @@ def main():
                     log(f"  activation formats : {af}")
                     log(f"  pass warnings: {len(s['warnings'])};  QDQ sites requested vs inserted (int/half/posit): "
                         f"{exp['int']}/{exp['half']}/{exp['posit']} vs {ir['onnx.Round']}/{ir['onnx.Cast'] // 2}/"
-                        f"{ir['posit.from_f32']} -> {'match' if s['sites_match'] else 'MISMATCH'}; "
+                        f"{ir['posit.round_f32'] + ir['posit.from_f32']} -> {'match' if s['sites_match'] else 'MISMATCH'}; "
                         f"survive ONNX-level passes: {s['qdq_survived_onnx_passes']}")
                     log(f"  compile {s['compile_seconds']:.0f}s (steps {{{', '.join(f'{k} {v:.1f}' for k, v in s['steps'].items())}}}), "
                         f"run {s['run_seconds_per_image'] * 1000:.0f} ms/image, peak RSS {s['peak_rss_gb']:.1f} GB")
