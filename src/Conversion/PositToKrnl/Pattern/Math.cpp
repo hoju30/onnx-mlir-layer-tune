@@ -8,8 +8,10 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
 #include "src/Dialect/Posit/PositOps.h"
+#include "src/Dialect/Posit/PositLut.hpp"
 #include "src/Conversion/PositToKrnl/TypeConverters.hpp"
 
 
@@ -588,6 +590,107 @@ struct PositToF32OpLowering : public OpConversionPattern<posit::ToF32Op> {
     auto callee = getOrCreateFunc(module, getPositRuntimeNameFor("to_f32", opNbits, opEs), fnTy);
 
     rewriter.create<func::CallOp>(loc, callee, ValueRange{inU, outU});
+    rewriter.replaceOp(op, out);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// posit.round_f32: f32 -> posit<nbits,es> -> f32, inlined as a table lookup
+// (src/Dialect/Posit/PositLut.hpp, bit-exact with sw::universal::posit) --
+// no posit storage buffer and no runtime call. Per element, the same steps as
+// fakeQuantPositViaLut:
+//   key = order-preserving uint32 of the float bits
+//   idx = number of thresholds <= key            (std::upper_bound)
+//   out = isfinite(x) ? values[idx] : NaN
+// The thresholds are padded with UINT32_MAX up to 2^k - 1 entries, so the
+// search is k unrolled compare/select steps with no bounds check; a NaN key
+// (bits 0x7FFFFFFF -> key 0xFFFFFFFF) can still pass the padding, so idx is
+// clamped before the values load (its result is replaced by NaN anyway).
+//===----------------------------------------------------------------------===//
+
+struct PositRoundF32OpLowering : public OpConversionPattern<posit::RoundF32Op> {
+  using OpConversionPattern<posit::RoundF32Op>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(posit::RoundF32Op op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    const PositLut *lut = getPositLutCached(
+        static_cast<unsigned>(op.getNbits()), static_cast<unsigned>(op.getEs()));
+    if (!lut)
+      return op.emitError() << "posit.round_f32: no rounding table for posit<"
+                            << op.getNbits() << "," << op.getEs() << ">";
+
+    Value in = adaptor.getInput();
+    auto inTy = llvm::dyn_cast<MemRefType>(in.getType());
+    auto outTy = llvm::dyn_cast<MemRefType>(
+        getTypeConverter()->convertType(op.getResult().getType()));
+    if (!inTy || !outTy || !inTy.getElementType().isF32() ||
+        !outTy.getElementType().isF32() || inTy.getRank() != outTy.getRank())
+      return rewriter.notifyMatchFailure(op, "round_f32 expects ranked f32 memrefs");
+    Value out = allocLikeValue(rewriter, loc, outTy, in);
+    if (!out)
+      return rewriter.notifyMatchFailure(op, "failed to allocate round_f32 result");
+
+    Type i32 = rewriter.getI32Type(), f32 = rewriter.getF32Type();
+    size_t numThresholds = lut->thresholds.size();
+    unsigned steps = 0;
+    while ((size_t(1) << steps) - 1 < numThresholds)
+      ++steps;
+    SmallVector<int32_t, 256> thresholds((size_t(1) << steps) - 1, -1);
+    for (size_t i = 0; i < numThresholds; ++i)
+      thresholds[i] = static_cast<int32_t>(lut->thresholds[i]);
+    Value thresholdTable = createKrnlGlobalFromDense(rewriter, loc,
+        DenseElementsAttr::get(
+            RankedTensorType::get({static_cast<int64_t>(thresholds.size())}, i32),
+            ArrayRef<int32_t>(thresholds)),
+        "posit_round_thresholds");
+    Value valueTable = createKrnlGlobalFromDense(rewriter, loc,
+        DenseElementsAttr::get(
+            RankedTensorType::get({static_cast<int64_t>(lut->values.size())}, f32),
+            ArrayRef<float>(lut->values)),
+        "posit_round_values");
+
+    Value signBit = rewriter.create<arith::ConstantIntOp>(loc, INT32_MIN, 32);
+    Value allOnes = rewriter.create<arith::ConstantIntOp>(loc, -1, 32);
+    Value zeroI32 = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+    Value expMask = rewriter.create<arith::ConstantIntOp>(loc, 0x7F800000, 32);
+    Value lastValue = rewriter.create<arith::ConstantIndexOp>(
+        loc, static_cast<int64_t>(lut->values.size()) - 1);
+    Value nan = rewriter.create<arith::ConstantFloatOp>(
+        loc, rewriter.getF32Type(), APFloat::getQNaN(APFloat::IEEEsingle()));
+    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+
+    auto roundOne = [&](OpBuilder &b, Location l, ValueRange ivs) {
+      Value x = b.create<memref::LoadOp>(l, in, ivs);
+      Value u = b.create<arith::BitcastOp>(l, i32, x);
+      Value negative = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::slt, u, zeroI32);
+      Value key = b.create<arith::SelectOp>(l, negative,
+          b.create<arith::XOrIOp>(l, u, allOnes), b.create<arith::OrIOp>(l, u, signBit));
+      Value pos = zero;
+      for (int s = static_cast<int>(steps) - 1; s >= 0; --s) {
+        Value cand = b.create<arith::AddIOp>(l, pos,
+            b.create<arith::ConstantIndexOp>(l, int64_t(1) << s));
+        Value t = b.create<memref::LoadOp>(l, thresholdTable,
+            ValueRange{b.create<arith::SubIOp>(l, cand, one)});
+        Value le = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::ule, t, key);
+        pos = b.create<arith::SelectOp>(l, le, cand, pos);
+      }
+      Value idx = b.create<arith::MinUIOp>(l, pos, lastValue);
+      Value v = b.create<memref::LoadOp>(l, valueTable, ValueRange{idx});
+      Value finite = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::ne,
+          b.create<arith::AndIOp>(l, u, expMask), expMask);
+      b.create<memref::StoreOp>(l, b.create<arith::SelectOp>(l, finite, v, nan), out, ivs);
+    };
+
+    // One scf.for per dimension, bounds from the input memref.
+    SmallVector<Value, 4> ubs;
+    for (int64_t d = 0; d < inTy.getRank(); ++d)
+      ubs.push_back(rewriter.create<memref::DimOp>(loc, in, d));
+    SmallVector<Value, 4> lbs(ubs.size(), zero), stepsV(ubs.size(), one);
+    scf::buildLoopNest(rewriter, loc, lbs, ubs, stepsV, roundOne);
+
     rewriter.replaceOp(op, out);
     return success();
   }
@@ -1599,6 +1702,7 @@ void populatePositToKrnlConversionPattern(TypeConverter &typeConverter,
   // [MOD][2026-01-14] 加上 MNIST 需要的 lowering
   patterns.add<PositConstantOpLowering,
                PositFromF32OpLowering, PositToF32OpLowering,
+               PositRoundF32OpLowering,
                PositDequantizeLinearOpLowering,
                PositReluOpLowering, PositClipOpLowering,
                PositConv2DOpLowering, PositMaxPool2DOpLowering,

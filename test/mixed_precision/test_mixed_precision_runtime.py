@@ -319,6 +319,36 @@ def _activation_inputs(seed=7):
         np.array([0.0, -0.0, 1e-30, -1e-30, 65504.0, -65504.0, 1.0, -1.0])]).astype(f32)
 
 
+def _mul_one_module(k):
+    """Mul(x, 1.0): with a=p<N>e<ES> the pass rounds x, the exact constant 1.0 and the product; posit
+    rounding is idempotent, so y = q(x) for every input -- negatives included, unlike a Relu."""
+    return wrap(f'''  func.func @main_graph(%arg0: tensor<1x{k}xf32> {{onnx.name = "x"}}) -> (tensor<1x{k}xf32> {{onnx.name = "y"}}) {{
+    %one = onnx.Constant dense<1.0> : tensor<f32>
+    %0 = "onnx.Mul"(%arg0, %one) {{onnx_node_name = "Mul_1"}} : (tensor<1x{k}xf32>, tensor<f32>) -> tensor<1x{k}xf32>
+    return %0 : tensor<1x{k}xf32>
+  }}''')
+
+
+_CORPUS = {}
+
+
+def posit_corpus(bits):
+    """(inputs, Universal's float -> posit<bits,1> -> float of them): the corpus
+    test_mixed_precision_weights.py checks the folded posit weights on, from posit_weight_reference.cpp
+    (every encoding and its float neighbours, every adjacent midpoint and its neighbours,
+    zero/subnormal/extreme/non-finite values, random raw bits and in-range values)."""
+    if bits not in _CORPUS:
+        d = tmpdir()
+        exe = os.path.join(d, "posit_corpus_reference")
+        if not os.path.exists(exe):
+            run([ENV["clangxx"], "-std=c++20", "-O2", f"-I{ENV['universal_inc']}",
+                 os.path.join(os.path.dirname(os.path.abspath(__file__)), "posit_weight_reference.cpp"), "-o", exe])
+        inp, exp = (os.path.join(d, f"corpus_p{bits}e1_{x}.bin") for x in ("input", "expected"))
+        run([exe, str(bits), inp, exp])
+        _CORPUS[bits] = (np.fromfile(inp, dtype=f32), np.fromfile(exp, dtype=f32))
+    return _CORPUS[bits]
+
+
 class ActivationExactness(unittest.TestCase):
     """Executed activation QDQ == independent reference, bit for bit."""
 
@@ -372,6 +402,21 @@ class ActivationExactness(unittest.TestCase):
                 pos = x > 0
                 changed = int((bits_of(exp[pos]) != bits_of(x[pos])).sum())
                 self.assertGreater(changed, int(0.9 * pos.sum()))
+
+    def test_posit_activation_universal_corpus(self):
+        """Both posit activation paths agree with Universal bit for bit on the full weight-LUT corpus
+        (~132K inputs per format): posit.round_f32's inlined table lookup (the default) and the
+        posit.from_f32/to_f32 runtime calls (MIXEDP_POSIT_ACTIVATION=runtime)."""
+        require("universal_inc", "mlir_inc", "posit_rt")
+        for bits in (4, 6, 8):
+            fmt = f"p{bits}e1"
+            x, exp = posit_corpus(bits)
+            for path in ("lut", "runtime"):
+                with self.subTest(fmt=fmt, path=path):
+                    so = build_so(f"act_corpus_{fmt}_{path}", _mul_one_module(len(x)), f"Mul_1:a={fmt}",
+                                  posit_fmt=fmt, extra_env={"MIXEDP_POSIT_ACTIVATION": path})
+                    assert_bit_exact(self, execute(so, x.reshape(1, -1)), exp.reshape(1, -1),
+                                     f"{fmt} {path}, {len(x)} inputs")
 
 
 # --------------------------------------------------------------------------- #

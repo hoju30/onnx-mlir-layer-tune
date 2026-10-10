@@ -100,6 +100,23 @@ def Posit_ToF32Op : Posit_Op<"to_f32", [Pure]> {
   let hasFolder = 0;
 }
 
+// f32 -> posit<nbits,es> -> f32 round trip as ONE op (fake quantization):
+// exactly sw::universal::posit<nbits,es>'s rounding, with the posit value never
+// stored. Unlike to_f32(from_f32(x)) it carries no qalign/storage semantics, so
+// --convert-posit-to-krnl lowers it to an inlined table lookup
+// (src/Dialect/Posit/PositLut.hpp) instead of runtime calls. Only (nbits, es)
+// pairs PositLut has a table for are lowerable: (4,1), (6,1), (8,1).
+// No SameOperandsAndResultType: ONNX shape inference may refine the input type
+// after this op is created.
+def Posit_RoundF32Op : Posit_Op<"round_f32", [Pure]> {
+  let summary = "round an f32 tensor through posit<nbits,es> and back to f32";
+  let arguments = (ins AnyTensor:$input, I64Attr:$nbits, I64Attr:$es);
+  let results   = (outs AnyTensor:$result);
+
+  let assemblyFormat = "$input attr-dict `:` type($input) `->` type($result)";
+  let hasFolder = 0;
+}
+
 def Posit_DequantizeLinearOp : Posit_Op<"dequantize_linear", [Pure]> {
   let summary = "dequantize integer tensor to posit tensor, with optional f32 reference";
   let description = [{

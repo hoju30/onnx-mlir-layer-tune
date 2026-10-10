@@ -135,19 +135,30 @@ ops inserted, brackets a round trip back to f32 before the real op runs):
   (deliberately avoids `onnx.QuantizeLinear`/`DequantizeLinear`, whose Krnl
   lowering is hardcoded to int8/uint8 only, so it cannot represent
   int4..int7).
-- `p<N>e<ES>`: `posit.from_f32` then `posit.to_f32` (the Posit dialect's
-  own cast ops), the same building block `--convert-onnx-to-posit` uses.
-  **Not** LUT-accelerated by this pass -- it is lowered by the existing,
-  shared `--convert-posit-to-krnl` pass and `src/posit_runtime.cpp` at
-  execution time, same as it is for the real Posit pass. LUT-accelerating
-  that shared runtime path is a possible follow-up, not part of this
-  change (it would affect `--convert-onnx-to-posit` too). Each inserted
-  `posit.from_f32` carries a nonzero `qalign_key` attribute: without it,
-  `--convert-posit-to-krnl` folds a directly-adjacent `to_f32(from_f32(x))`
-  straight to `x`, which silently turns the whole simulated round trip into
-  a no-op (an activation-only posit run came out bit-identical to FP32
-  before this was fixed). An unregistered key is numerically transparent in
-  the runtime, so it only disables that fold.
+- `p<N>e<ES>`: one `posit.round_f32 {nbits, es}` (a Posit dialect op:
+  f32 -> posit<N,ES> -> f32 as a single fake-quantization step, the posit
+  value never stored). `--convert-posit-to-krnl` lowers it to an **inlined
+  table lookup** -- the same Universal-derived decision boundaries the
+  weight path uses (`src/Dialect/Posit/PositLut.hpp`), stored as two
+  `krnl.global` tables, searched with `k` unrolled compare/select steps per
+  element (thresholds padded to `2^k - 1`) -- so it needs no posit runtime
+  call and no posit storage buffer. Only `(4,1)`, `(6,1)`, `(8,1)` have a
+  table. Bit-exact with Universal: checked on the weight path's full
+  corpus (~132K inputs per format) by
+  `test/mixed_precision/test_mixed_precision_runtime.py`, and with every
+  supported MobileNetV2 node at `a=p8e1` / `a=p4e1` the 50,000 logits of 50
+  images were bit-identical to the runtime path below at 9.2x / 13.2x its
+  speed (`experiments/mixed_precision/run_posit_round_check.py`).
+  `MIXEDP_POSIT_ACTIVATION=runtime` -- and any posit format without a table
+  -- keeps the original pair instead: `posit.from_f32` then `posit.to_f32`
+  (the Posit dialect's own cast ops, the same building block
+  `--convert-onnx-to-posit` uses), executed by `src/posit_runtime.cpp`.
+  Each inserted `posit.from_f32` carries a nonzero `qalign_key` attribute:
+  without it, `--convert-posit-to-krnl` folds a directly-adjacent
+  `to_f32(from_f32(x))` straight to `x`, which silently turns the whole
+  simulated round trip into a no-op (an activation-only posit run came out
+  bit-identical to FP32 before this was fixed). An unregistered key is
+  numerically transparent in the runtime, so it only disables that fold.
 - `f16`/`bf16`: `onnx.Cast` down then immediately back up to f32 (bracket,
   not a sustained retype -- unlike `--convert-onnx-to-lowprecision`'s
   bf16/f16 path, which keeps the whole op running in bf16/f16, this pass
@@ -157,8 +168,8 @@ ops inserted, brackets a round trip back to f32 before the real op runs):
 
 ## Pipeline note
 
-Because `p<N>e<ES>` activation formats emit real `posit.from_f32`/`to_f32`
-ops into otherwise-ONNX-dialect IR, any pipeline that uses a posit format
+Because `p<N>e<ES>` activation formats emit Posit dialect ops
+(`posit.round_f32`, or `posit.from_f32`/`to_f32`) into otherwise-ONNX-dialect IR, any pipeline that uses a posit format
 on any node (via `w=` or `a=`) must also run
 `--convert-posit-to-krnl` in addition to `--convert-onnx-to-krnl`, even if
 `--convert-onnx-to-posit` itself was never invoked -- e.g.:
@@ -211,6 +222,96 @@ integration pitfalls surfaced while doing that; they apply to any real model:
   activations were not affected in the same tests, and `f16` *weights* are
   folded at compile time, so they are not affected either.
 
+## Collecting statistics in the compiled FP32 graph (`--mixedp-collect-stats`)
+
+A second `onnx-mlir-opt` pass instruments the **FP32** graph instead of
+quantizing it, so the statistics a mixed-precision assignment needs come from
+the same compiled graph the mixed-precision builds start from, not from a
+separate runtime. It visits every node the pass above could quantize (a named
+op from the [Per-op scope](#per-op-scope) list, whether or not it appears in
+`MIXEDP_NODE_FORMATS`) and taps exactly the points that pass would QDQ: each
+activation operand (the weight excluded) and the result. A value seen by
+several points -- a result feeding another supported node -- is tapped once,
+right after it is defined.
+
+- `MIXEDP_STATS_MODE`:
+  - `ranges` (default) -- per tap, the tensor's `(min, max)` over all of its
+    elements, i.e. the per-tensor range the `int` activation parameters are
+    derived from.
+  - `weights` -- compile time only, the IR is left untouched: for every
+    weight-bearing node with a compile-time f32 weight and every candidate
+    format, the squared weight quantization error summed per output channel,
+    `sum_{i in o} (Q(W)_i - W_i)^2`, where `Q` is this pass's own weight
+    fake-quant (per-channel `int` scales under `MIXEDP_WEIGHT_PER_CHANNEL=1`,
+    the posit LUT, APFloat `f16`/`bf16`) and the channel axis is the one
+    `MIXEDP_WEIGHT_PER_CHANNEL` uses. `MIXEDP_STATS_FORMATS` (comma-separated)
+    picks the formats; default `int4..int8,p4e1,p6e1,p8e1,f16,bf16`. Nodes
+    whose weight operand is not a constant are listed under `skipped`.
+  - `grads` -- appends the graph's own **backward pass**
+    (`src/Conversion/ONNXToMixedPrecision/MixedPrecisionBackward.cpp`: reverse
+    sweep over the function body emitting each op's vector-Jacobian product as
+    ONNX ops; Conv, Gemm/MatMul, Add/Sub/Mul, Relu, Clip, Sigmoid,
+    ReduceMean/GlobalAveragePool, Reshape/Flatten; static shapes, batch 1;
+    Conv/Gemm biases computed at run time get their gradient too, and a
+    ReduceMean with no axes and `noop_with_empty_axes = 1` passes it through).
+    The loss is softmax cross-entropy of result 0 against a new function
+    argument `mixedp_onehot` of the same shape (seed `softmax(z) - onehot`).
+    Per tap, with `g` the tensor's total gradient, `sum(g^2)` and `sum(g)`
+    over every axis but the channel axis (1 for NCHW, else the last; a rank-1
+    tensor is its own per-channel sum); per
+    weight-bearing node with a compile-time weight, `sum(dW^2)` per output
+    channel. The Conv input gradient is a stride-1 Conv of the zero-inserted
+    `dY` with the spatially flipped, per-group transposed weight (folded at
+    compile time) -- not `onnx.ConvTranspose`, whose decomposition does not
+    handle groups; the weight gradient is a Conv of `X` with `dY` as the
+    kernel (strides and dilations swapped), or a MatMul for unpadded 1x1
+    convs. Checked against PyTorch autograd on MobileNetV2
+    (`experiments/mixed_precision/run_native_grad_check.py`): images agree to
+    ~1e-6 except where a ReLU6 input within float rounding of 0 falls on the
+    other side of the kink (~1 element in some images).
+  - `errors` -- per tap and candidate activation format
+    (`MIXEDP_STATS_FORMATS`), `d = Q(t) - t` with `Q` exactly the activation
+    QDQ `--convert-onnx-to-mixed-precision` inserts (`posit.round_f32`, cast
+    pairs, the int QDQ chain), reduced to `sum(d)` and `sum(d^2)` per channel
+    and inserted right after `t` is defined. Int formats need the tensor's
+    calibration range: `MIXEDP_STATS_RANGES` names a JSON
+    `{node: {slot: [min, max]}}` (e.g. from a `ranges` run), from which the pass
+    derives `(scale, zero point)` with the same arithmetic
+    `experiments/mixed_precision/eval_random_mixed_precision.int_qparams` uses
+    for `MIXEDP_NODE_FORMATS`.
+  - `criterion` -- `grads` and `errors` in one graph.
+  - `values` -- (for testing) every tap's tensor, flattened.
+
+  The `errors` graph has thousands of small loops in one function: lower it
+  with `--O0` and link with `clang++ -O0` (about 2 minutes for MobileNetV2 and
+  10 formats; at `-O1`/`-O3` LLVM takes over 20 minutes). Every `.so` built from
+  the same imported model exports `main_graph_<postfix>`; to load two of them
+  into one process (e.g. a `grads` and an `errors` build), give each its own
+  `"onnx-mlir.symbol-postfix"` module attribute, or the second silently runs
+  the first one's graph.
+- `MIXEDP_STATS_LAYOUT` (required): path of the JSON file the pass writes. In
+  `ranges` mode it lists every point as `{node, op, slot, tap}`, with `slot` =
+  `x`/`y` for unary ops and `a`/`b`/`y` for the binary elementwise ops (the
+  same order as the `int` activation params), plus `result_index`, `num_taps`
+  and `values_per_tap`. In `weights` mode it holds the errors themselves
+  (`nodes[].err2[<format>]`, one value per output channel). In `grads` mode it
+  adds `input_name`/`input_index` (the one-hot argument), `taps[]` and
+  `weights[]` with each segment's `offset` and `channels` in `mixedp_stats`.
+
+All taps are concatenated into **one** extra f32 result named `mixedp_stats`
+(`values_per_tap` values per tap, in tap order) appended after the model's own
+outputs. Run it in place of `--convert-onnx-to-mixed-precision` on the freshly
+imported graph, then lower as usual:
+
+```
+MIXEDP_STATS_LAYOUT=layout.json onnx-mlir-opt model.onnx.mlir \
+  --shape-inference --mixedp-collect-stats -o model.stats.onnx.mlir
+```
+
+The calibration range of a tensor is then the elementwise min/max of the
+per-image `mixedp_stats` over the calibration images
+(`experiments/mixed_precision/run_native_calib_check.py`).
+
 ## Known limitations
 
 - No calibration: activation `int4..int8` scale/zero-point must be
@@ -218,15 +319,23 @@ integration pitfalls surfaced while doing that; they apply to any real model:
   `experiments/mixed_precision/eval_random_mixed_precision.py` shows one way:
   min/max of every node's own input/output tensors over a few images, turned
   into an affine (asymmetric) scale/zero-point.
-- `intN` weight quantization is **per-tensor**: one scale,
+- `intN` weight quantization is **per-tensor** by default: one scale,
   `max|w| / (2^(N-1)-1)`, for the whole constant. That is hard on nets whose
   output channels differ in magnitude by orders of magnitude (BN-folded
   depthwise convolutions). In timm's `mobilenetv2_100.ra_in1k` the per-channel
   `max|w|` inside a single layer spans up to 1.7e8x, so per-tensor int8 rounds
   196 of the 7136 depthwise output channels entirely to zero (int4: 1593), and on
   100 ImageNet validation images `int4`..`int6` weights alone give <=1% top-1
-  (`int7` 52%, `int8` 73%, FP32 81%). Per-channel weight scales would be the
-  natural extension; they are not implemented.
+  (`int7` 52%, `int8` 73%, FP32 81%). Set `MIXEDP_WEIGHT_PER_CHANNEL=1` to use one
+  scale per output channel instead (same rounding, `max|w_c| / (2^(N-1)-1)` per
+  channel): axis 0 for `Conv` and for `Gemm` with `transB=1`, axis 1 for `Gemm`
+  without it, the last axis of a `MatMul`'s constant right operand. Other weight
+  formats are unaffected. On 1000 ImageNet validation images, all-`int8` weights
+  with FP32 activations go from 0.1% to 77.3% top-1 on timm
+  `efficientnet_b0.ra_in1k` (FP32 77.4%) and from 70.6% to 71.6% on
+  `mobilenetv2_100.ra_in1k` (FP32 72.1%); the compiled logits match an
+  onnxruntime simulation of the same arithmetic to 1e-5
+  (`experiments/mixed_precision/run_compiled_compare.py --check`).
 - Weight quantization requires the weight operand to be a compile-time
   `onnx.Constant`; a non-constant weight leaves the weight untouched
   (warned, not an error).

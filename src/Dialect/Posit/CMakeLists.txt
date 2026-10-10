@@ -38,3 +38,29 @@ add_onnx_mlir_library(OMPositOps
     MLIRArithDialect
     MLIRTensorDialect
 )
+
+# Exact posit<N,ES> rounding LUT (PositLut.hpp), built with the header-only
+# Universal posit template as its oracle -- the same UNIVERSAL_ROOT
+# resolution src/Conversion/ONNXToPosit and ONNXToMixedPrecision use. Kept
+# out of OMPositOps so the dialect itself does not depend on Universal.
+set(UNIVERSAL_ROOT "${UNIVERSAL_ROOT}" CACHE PATH
+  "Path to the Universal posit headers used by ONNXToPosit/ONNXToMixedPrecision compile-time constant encoding.")
+if (NOT UNIVERSAL_ROOT)
+  if (EXISTS "${ONNX_MLIR_SRC_ROOT}/src/.deps/universal")
+    set(UNIVERSAL_ROOT "${ONNX_MLIR_SRC_ROOT}/src/.deps/universal" CACHE PATH
+      "Path to the Universal posit headers used by ONNXToPosit/ONNXToMixedPrecision compile-time constant encoding." FORCE)
+  elseif (EXISTS "${ONNX_MLIR_SRC_ROOT}/../universal")
+    set(UNIVERSAL_ROOT "${ONNX_MLIR_SRC_ROOT}/../universal" CACHE PATH
+      "Path to the Universal posit headers used by ONNXToPosit/ONNXToMixedPrecision compile-time constant encoding." FORCE)
+  endif()
+endif()
+
+add_onnx_mlir_library(OMPositLut
+  PositLut.cpp
+
+  INCLUDE_DIRS PUBLIC
+    ${ONNX_MLIR_SRC_ROOT}/include
+)
+
+target_compile_features(OMPositLut PRIVATE cxx_std_20)
+target_include_directories(OMPositLut PRIVATE ${UNIVERSAL_ROOT}/include/sw)

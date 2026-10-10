@@ -108,6 +108,11 @@ std::unique_ptr<mlir::Pass> createConvertONNXToLowPrecisionPass();
 // independently per weight/activation, all realized via QDQ simulation.
 std::unique_ptr<mlir::Pass> createConvertONNXToMixedPrecisionPass();
 
+// Per-tensor statistics at every point the mixed-precision pass can quantize,
+// appended as a 'mixedp_stats' result (MIXEDP_STATS_MODE /
+// MIXEDP_STATS_LAYOUT env vars).
+std::unique_ptr<mlir::Pass> createMixedPrecisionCollectStatsPass();
+
 
 /// Add pass for lowering to Krnl IR.
 std::unique_ptr<mlir::Pass> createLowerToKrnlPass();

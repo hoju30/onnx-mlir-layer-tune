@@ -1,9 +1,9 @@
 # Weight/activation-separated QDQ mixed-precision pass. Needs the Posit
-# dialect (for the posit.from_f32/to_f32 activation QDQ path) and the
-# header-only Universal posit<N,ES> template (for the LUT-accelerated
-# compile-time weight QDQ path, N<=8) -- same dependencies
-# src/Conversion/ONNXToPosit/CMakeLists.txt already resolves, reused here
-# rather than re-deriving the search logic.
+# dialect (for the posit.from_f32/to_f32 activation QDQ path) and OMPositLut
+# (src/Dialect/Posit/PositLut.hpp: the LUT-accelerated compile-time weight QDQ
+# path, N<=8, built on the header-only Universal posit<N,ES> template) -- same
+# Universal dependency src/Conversion/ONNXToPosit/CMakeLists.txt already
+# resolves, reused here rather than re-deriving the search logic.
 set(UNIVERSAL_ROOT "${UNIVERSAL_ROOT}" CACHE PATH
   "Path to the Universal posit headers used by ONNXToPosit/ONNXToMixedPrecision compile-time constant encoding.")
 if (NOT UNIVERSAL_ROOT)
@@ -20,6 +20,7 @@ set(UNIVERSAL_INCLUDE_DIR "${UNIVERSAL_ROOT}/include/sw")
 
 add_onnx_mlir_library(OMONNXToMixedPrecision
   ONNXToMixedPrecision.cpp
+  MixedPrecisionBackward.cpp
 
   LINK_LIBS PUBLIC
     OMONNXOps
@@ -40,6 +41,7 @@ add_onnx_mlir_library(OMONNXToMixedPrecision
     MLIRDialect
 
     OMPositOps
+    OMPositLut
 
   DEPENDS
     OMONNXOps

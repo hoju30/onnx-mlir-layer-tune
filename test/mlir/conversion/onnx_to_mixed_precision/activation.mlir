@@ -1,6 +1,8 @@
 // RUN: env MIXEDP_NODE_FORMATS="R_INT4:a=int4:0.05:0:0.1:0,ADD_INT6:a=int6:0.05:0:0.06:1:0.1:0,R_BF16:a=bf16,R_F16:a=f16,R_P8:a=p8e1,R_F32:a=fp32,MM_W4_ABF16:w=int4:a=bf16,MM_ABF16_ONLY:a=bf16" onnx-mlir-opt --convert-onnx-to-mixed-precision %s -split-input-file > %t 2>&1
 // RUN: FileCheck %s --implicit-check-not=warning < %t
-// RUN: FileCheck %s --check-prefix=UNIQUE < %t
+// RUN: env MIXEDP_POSIT_ACTIVATION=runtime MIXEDP_NODE_FORMATS="R_INT4:a=int4:0.05:0:0.1:0,ADD_INT6:a=int6:0.05:0:0.06:1:0.1:0,R_BF16:a=bf16,R_F16:a=f16,R_P8:a=p8e1,R_F32:a=fp32,MM_W4_ABF16:w=int4:a=bf16,MM_ABF16_ONLY:a=bf16" onnx-mlir-opt --convert-onnx-to-mixed-precision %s -split-input-file > %t.rt 2>&1
+// RUN: FileCheck %s --check-prefix=RUNTIME --implicit-check-not=warning < %t.rt
+// RUN: FileCheck %s --check-prefix=UNIQUE < %t.rt
 
 // Activation QDQ (runtime): the pass inserts a quantize->dequantize round trip
 // in front of every activation operand and after the result, and the ORIGINAL
@@ -114,22 +116,32 @@ func.func @f16_bracket(%arg0: tensor<1x4xf32>) -> tensor<1x4xf32> {
 
 // -----
 
-// posit: from_f32 -> to_f32 pairs around the op. Regression: every from_f32
-// MUST carry a nonzero, per-site-unique "qalign_key". Without it,
+// posit: one posit.round_f32 (f32 -> posit<8,1> -> f32, lowered to a table
+// lookup by --convert-posit-to-krnl) in front of the op and one after it.
+// MIXEDP_POSIT_ACTIVATION=runtime keeps the original from_f32 -> to_f32 pairs,
+// executed by posit_runtime.cpp (RUNTIME). Regression for that path: every
+// from_f32 MUST carry a nonzero, per-site-unique "qalign_key". Without it,
 // --convert-posit-to-krnl folds a directly-adjacent to_f32(from_f32(x)) to x,
 // silently turning the whole simulated round trip into a no-op (see
-// posit_lowering.mlir for the lowered-IR check of the same regression).
+// posit_lowering.mlir for the lowered-IR check of both paths).
 func.func @posit_p8e1(%arg0: tensor<1x4xf32>) -> tensor<1x4xf32> {
   %0 = "onnx.Relu"(%arg0) {onnx_node_name = "R_P8"} : (tensor<1x4xf32>) -> tensor<1x4xf32>
   return %0 : tensor<1x4xf32>
 }
 // CHECK-LABEL: func.func @posit_p8e1
-// CHECK: %[[P:[0-9]+]] = posit.from_f32 %arg0 {qalign_key = [[K1:[1-9][0-9]*]] : i64} : tensor<1x4xf32> -> tensor<1x4x!posit.type<8, 1>>
-// CHECK: %[[F:[0-9]+]] = posit.to_f32 %[[P]] : tensor<1x4x!posit.type<8, 1>> -> tensor<1x4xf32>
+// CHECK: %[[F:[0-9]+]] = posit.round_f32 %arg0 {es = 1 : i64, nbits = 8 : i64} : tensor<1x4xf32> -> tensor<1x4xf32>
 // CHECK: %[[R:[0-9]+]] = "onnx.Relu"(%[[F]]) {onnx_node_name = "R_P8"}
-// CHECK: %[[YP:[0-9]+]] = posit.from_f32 %[[R]] {qalign_key = [[K2:[1-9][0-9]*]] : i64}
-// CHECK: %[[YF:[0-9]+]] = posit.to_f32 %[[YP]] : tensor<1x4x!posit.type<8, 1>> -> tensor<1x4xf32>
+// CHECK: %[[YF:[0-9]+]] = posit.round_f32 %[[R]] {es = 1 : i64, nbits = 8 : i64} : tensor<1x4xf32> -> tensor<1x4xf32>
+// CHECK-NOT: posit.from_f32
 // CHECK: return %[[YF]]
+
+// RUNTIME-LABEL: func.func @posit_p8e1
+// RUNTIME: %[[P:[0-9]+]] = posit.from_f32 %arg0 {qalign_key = [[K1:[1-9][0-9]*]] : i64} : tensor<1x4xf32> -> tensor<1x4x!posit.type<8, 1>>
+// RUNTIME: %[[F:[0-9]+]] = posit.to_f32 %[[P]] : tensor<1x4x!posit.type<8, 1>> -> tensor<1x4xf32>
+// RUNTIME: %[[R:[0-9]+]] = "onnx.Relu"(%[[F]]) {onnx_node_name = "R_P8"}
+// RUNTIME: %[[YP:[0-9]+]] = posit.from_f32 %[[R]] {qalign_key = [[K2:[1-9][0-9]*]] : i64}
+// RUNTIME: %[[YF:[0-9]+]] = posit.to_f32 %[[YP]] : tensor<1x4x!posit.type<8, 1>> -> tensor<1x4xf32>
+// RUNTIME: return %[[YF]]
 
 // Use an independent scan: the forbidden region must include the ENTIRE
 // second from_f32 line. A CHECK-NOT followed by CHECK on that same line would

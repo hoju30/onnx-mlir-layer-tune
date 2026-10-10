@@ -12,6 +12,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 
 #include "src/Dialect/Posit/PositDialect.h"
@@ -957,6 +958,7 @@ struct ConvertPositToKrnlPass
                     func::FuncDialect,
                     memref::MemRefDialect,
                     arith::ArithDialect,
+                    scf::SCFDialect,
                     tensor::TensorDialect,
                     mlir::KrnlDialect>();
   }
@@ -1128,6 +1130,7 @@ struct ConvertPositToKrnlPass
     target.addIllegalOp<posit::ConstantOp, posit::AddOp, posit::SubOp,
                         posit::MulOp, posit::DivOp,
                         posit::FromF32Op, posit::ToF32Op,
+                        posit::RoundF32Op,
                         posit::DequantizeLinearOp, posit::ReluOp,
                         posit::ClipOp,
                         posit::Conv2DOp, posit::MaxPool2DOp, posit::ReshapeOp,

@@ -18,4 +18,11 @@ namespace onnx_mlir {
 /// three on different nodes, each pass only touching the nodes named in its
 /// own env var. See docs/MixedPrecisionFormats.md.
 std::unique_ptr<mlir::Pass> createConvertONNXToMixedPrecisionPass();
+
+/// Instrument the FP32 graph: append one 'mixedp_stats' f32 result holding
+/// per-tensor statistics (MIXEDP_STATS_MODE, default 'ranges' = min/max) at
+/// every point the pass above can quantize, for every named supported node,
+/// and write the (node, slot) -> tap layout to the JSON file named by
+/// MIXEDP_STATS_LAYOUT. See docs/MixedPrecisionFormats.md.
+std::unique_ptr<mlir::Pass> createMixedPrecisionCollectStatsPass();
 } // namespace onnx_mlir

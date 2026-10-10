@@ -24,6 +24,8 @@ add_onnx_mlir_library(OMPositToKrnl
     MLIRDialect
 
     OMPositOps
+    OMPositLut
+    MLIRSCFDialect
 
   DEPENDS
     OMONNXOps
