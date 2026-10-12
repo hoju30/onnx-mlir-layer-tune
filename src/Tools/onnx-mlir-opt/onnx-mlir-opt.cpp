@@ -227,7 +227,7 @@ int main(int argc, char **argv) {
               : mlir::SourceMgrDiagnosticVerifierHandler::Level::None)
       .verifyPasses(verify_passes)
       .allowUnregisteredDialects(allowUnregisteredDialects)
-      .emitBytecode(false)
+      .emitBytecode(emit_bytecode)
       .useExplicitModule(false);
 
   if (failed(MlirOptMain(output->os(), std::move(file), registry, config)))

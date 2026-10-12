@@ -101,6 +101,7 @@ bool split_input_file;                                 // onnx-mlir-opt only
 bool verify_diagnostics;                               // onnx-mlir-opt only
 bool verify_passes;                                    // onnx-mlir-opt only
 bool allowUnregisteredDialects;                        // onnx-mlir-opt only
+bool emit_bytecode;                                    // onnx-mlir-opt only
 
 // Category for common options shared between onnx-mlir and onnx-mlir-opt.
 llvm::cl::OptionCategory OnnxMlirCommonOptions("common options",
@@ -792,6 +793,15 @@ static llvm::cl::opt<bool, true> allowUnregisteredDialectsOpt(
     "allow-unregistered-dialect",
     llvm::cl::desc("Allow operation with no registered dialects."),
     llvm::cl::location(allowUnregisteredDialects), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirOptOptions));
+
+static llvm::cl::opt<bool, true> emit_bytecode_opt("emit-bytecode",
+    llvm::cl::desc("Emit MLIR bytecode instead of text. Large constants "
+                   "(dense_resource blobs) are stored as raw bytes rather "
+                   "than hex strings: half the size, and parsing / printing "
+                   "skip the hex conversion. Bytecode input is detected "
+                   "automatically."),
+    llvm::cl::location(emit_bytecode), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirOptOptions));
 
 // Configuration states associated with certain options.

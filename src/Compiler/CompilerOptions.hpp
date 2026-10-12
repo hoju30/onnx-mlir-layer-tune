@@ -148,6 +148,7 @@ extern bool split_input_file;          // onnx-mlir-opt only
 extern bool verify_diagnostics;        // onnx-mlir-opt only
 extern bool verify_passes;             // onnx-mlir-opt only
 extern bool allowUnregisteredDialects; // onnx-mlir-opt only
+extern bool emit_bytecode;             // onnx-mlir-opt only
 
 extern std::string customEnvFlags;
 
