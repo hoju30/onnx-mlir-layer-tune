@@ -75,6 +75,8 @@ class Spec:
     old_picks: dict                   # budget -> formats of the earlier BC run
     old_compiled: dict                # "BC_f0.60" / "SQNR_f0.60" -> metrics
     workers: int
+    errors_shard_nodes: int = 8       # nodes per errors statistics build, see native_tables
+    eval_levels: tuple = ("O3", "O3")  # (Krnl -O, clang -O) of the evaluated builds (run_native_auto.py)
 
 
 def cross_entropy(z, y):
@@ -172,13 +174,44 @@ def bert_spec(work, with_references=True):
                 elems, flops, lambda: bert_torch_tables(graph, nodes, names, cx, cy), picks, old, 10)
 
 
+def qwen3_spec(work, with_references=True):
+    """Qwen3-0.6B on WikiText-2 windows (qwen3_prepare.py), set up as GPT-2: the 196 transformer projections (q/k/v/o,
+    gate/up/down) are searched; embedding, tied LM head, norms and activation x activation MatMuls stay FP32. No
+    earlier references exist (with_references is ignored)."""
+    src = HERE / "runs/qwen3_prepare_20261011"
+    graph = onnx.load(str(src / "model.onnx"))
+    mapping = json.loads((src / "node_mapping.json").read_text())
+    calib, test = np.load(src / "validation_tokens.npy"), np.load(src / "test_tokens.npy")
+    nodes = [n for n in erm.supported_nodes(graph) if n["name"] in mapping]
+    names = [n["name"] for n in nodes]
+    inits = {i.name: i for i in graph.graph.initializer}
+    by_name = {n.name: n for n in graph.graph.node}
+    seq, vocab = calib.shape[1], 151936
+    elems = {n: int(np.prod(inits[by_name[n].input[1]].dims)) for n in names}
+    flops = {n: elems[n] * seq for n in names}
+    del graph, inits, by_name                          # 3 GB of weights
+
+    def onehot(i):                    # next-token targets; the last position has none
+        t = np.zeros((1, seq, vocab), np.float32)
+        t[0, np.arange(seq - 1), calib[i, 1:]] = 1.0
+        return t
+
+    def metrics(z):                   # per window: float64 logits of all windows at once would take ~5 GB
+        nll = np.stack([cross_entropy(z[i, :-1], test[i, 1:]) for i in range(len(test))])
+        return {"per_item": nll.mean(1), "ppl": float(np.exp(nll.mean())), "nll": float(nll.mean()),
+                "top1": float((z[:, :-1, :].argmax(-1) == test[:, 1:]).mean())}
+
+    return Spec("qwen3", src / "model.onnx", [0.8, 1.0, 1.25, 1.5], calib, onehot, test, metrics, ("ppl", "nll"),
+                names, nodes, elems, flops, None, {}, {}, 4, errors_shard_nodes=28,
+                eval_levels=("O3", "O0"))      # clang -O3 on its main_graph runs over 15 min; -O0 runs as fast
+
+
 # --------------------------------------------------------------------------- #
 # Native statistics and table
 # --------------------------------------------------------------------------- #
 # (Krnl lowering -O, clang -O) per statistics build, by model family; see native_tables
 STATS_LEVELS = {"conv": {"ranges": ("O1", "O1"), "grads": ("O1", "O1"), "errors": ("O3", "O0")},
                 "matmul": {"ranges": ("O3", "O0"), "grads": ("O3", "O0"), "errors": ("O3", "O0")}}
-ERRORS_SHARD_NODES = 8
 
 
 class MemoryBudget:
@@ -236,10 +269,11 @@ def stats_build(tools, work, base, name, env, levels, budget):
 
 def stats_runs(pool, tools, so_postfix, layout, inputs_path, n, budget, onehot_dir=None):
     """The statistics result of the .so on each of the n calibration inputs, [n, num_values] float64: one process
-    per input, as many at a time as `pool` has workers and `budget` admits (a run peaks at ~2x the constants file,
-    which it maps, plus 0.3 GB)."""
+    per input, as many at a time as `pool` has workers and `budget` admits. A run's private memory is ~0.7x the
+    constants file plus 0.3 GB (Qwen3-0.6B grads: 2.4 GB RssAnon for 3.4 GB of constants); the constants it maps are
+    shared, reclaimable page cache (2.8 GB RssFile there) and are not counted per run."""
     so, postfix = so_postfix
-    need = 2 * sum(p.stat().st_size for p in so.parent.glob("*.constants.bin")) / 2 ** 30 + 0.3
+    need = 0.7 * sum(p.stat().st_size for p in so.parent.glob("*.constants.bin")) / 2 ** 30 + 0.3
 
     def one(i):
         out = so.parent / f"out_{i}.npy"
@@ -276,9 +310,11 @@ def native_tables(spec, tools, work, log, workers=os.cpu_count()):
       weights                                          (one onnx-mlir-opt pass)
       grads build  -> grads runs
       ranges build -> ranges runs -> errors builds (need the int ranges) -> errors runs
-    errors is split into shards of ERRORS_SHARD_NODES nodes, built and run concurrently: its lowering to LLVM is
-    superlinear in the graph (EfficientNet-B0: 82 nodes 72 s, 20 nodes 7 s), while each shard only adds one more
-    forward pass per input. Every statistics run is its own process (one .so, one calibration input), at most
+    errors is split into shards of spec.errors_shard_nodes nodes (8), built and run concurrently: its lowering to LLVM
+    is superlinear in the graph (EfficientNet-B0: 82 nodes 72 s, 20 nodes 7 s), while each shard only adds one more
+    forward pass per input. Every shard parses the whole imported model, so a model whose import is GBs of text
+    (Qwen3-0.6B: 6 GB, ~2 min of fixed cost per build, one or two builds at a time in memory) uses fewer, larger
+    shards. Every statistics run is its own process (one .so, one calibration input), at most
     `workers` at a time, and builds and runs are admitted while their estimated peak memory fits in 80% of the
     available memory. The builds store constants to file (no weights in the .ll); their -O levels (STATS_LEVELS)
     depend on the model: Krnl -O3 tiles and vectorizes MatMul (GPT-2 forward 24 s -> 4 s per input) but makes the
@@ -310,7 +346,7 @@ def native_tables(spec, tools, work, log, workers=os.cpu_count()):
     for i in range(n_cal):
         np.save(onehot_dir / f"{i}.npy", spec.onehot(i))
     levels = STATS_LEVELS["conv" if any(n.op_type == "Conv" for n in graph.graph.node) else "matmul"]
-    k = -(-len(spec.names) // ERRORS_SHARD_NODES)
+    k = -(-len(spec.names) // spec.errors_shard_nodes)
     shards = [spec.names[j::k] for j in range(k)]        # interleaved: early and late layers in every shard
     run_info = {}
 
@@ -731,6 +767,7 @@ def main():
         tm = time.time()
         refs = not args.criterion_only
         spec = (gpt2_spec(work, refs) if tag == "gpt2" else bert_spec(work, refs) if tag == "bert"
+                else qwen3_spec(work, refs) if tag == "qwen3"
                 else cnn_spec(tag, args.images_dir, args.num_eval, work, refs))
         if args.criterion_only:
             B, C, _, t = native_tables(spec, tools, work, log)
