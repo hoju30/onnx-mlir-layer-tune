@@ -622,34 +622,40 @@ static void lowerIterateOp(KrnlIterateOp &iterateOp, OpBuilder &builder,
 
 static void removeOps(llvm::SmallPtrSetImpl<Operation *> &opsToErase) {
   // Remove lowered operations topologically; if ops are not removed
-  // topologically, memory error will occur.
-  size_t numOpsToRemove = opsToErase.size();
-  // Given N operations to remove topologically, and that we remove
-  // at least one operation during each pass through opsToErase, we
-  // can only have a maximum of N passes through opsToErase.
-  for (size_t i = 0; i < numOpsToRemove; i++) {
-    for (Operation *op : opsToErase) {
-      bool safeToDelete = op->use_empty();
-      safeToDelete &= llvm::all_of(op->getRegions(), [](Region &region) {
-        return llvm::all_of(region.getBlocks(), [](Block &block) {
-          return (block.getOperations().size() == 0) ||
-                 (block.getOperations().size() == 1 &&
-                     block.getOperations()
-                         .front()
-                         .hasTrait<OpTrait::IsTerminator>());
-        });
-      });
-
-      if (safeToDelete) {
-        op->erase();
-        opsToErase.erase(op);
-        // Restart, itr has been invalidated.
-        break;
-      }
+  // topologically, memory error will occur. An op is ready once it has no
+  // uses and its regions hold nothing but a terminator. Each sweep erases
+  // every ready op (erasing one never makes another unready), which can make
+  // further ops ready; stop when a sweep erases nothing. Ops still in use
+  // stay for a later call.
+  //
+  // This is called once per krnl.permute with every lowered (but not yet
+  // erasable) iterate op of the function in the set. Restarting the scan
+  // after each erasure, and rescanning up to N times when nothing is ready,
+  // made each call O(N^2) and the pass cubic in practice: on the backward
+  // graph of Qwen3-0.6B (Krnl -O3, tiled MatMuls) it ran for over 15 minutes.
+  auto ready = [](Operation *op) {
+    return op->use_empty() &&
+           llvm::all_of(op->getRegions(), [](Region &region) {
+             return llvm::all_of(region.getBlocks(), [](Block &block) {
+               return (block.getOperations().size() == 0) ||
+                      (block.getOperations().size() == 1 &&
+                          block.getOperations()
+                              .front()
+                              .hasTrait<OpTrait::IsTerminator>());
+             });
+           });
+  };
+  SmallVector<Operation *, 16> sweep;
+  do {
+    sweep.clear();
+    for (Operation *op : opsToErase)
+      if (ready(op))
+        sweep.push_back(op);
+    for (Operation *op : sweep) {
+      opsToErase.erase(op);
+      op->erase();
     }
-    if (opsToErase.empty())
-      break;
-  }
+  } while (!sweep.empty() && !opsToErase.empty());
 }
 
 static LogicalResult interpretOperation(Operation *op, OpBuilder &builder,
