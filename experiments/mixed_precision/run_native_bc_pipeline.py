@@ -240,9 +240,18 @@ def mem_available_gb():
     return next(int(l.split()[1]) for l in open("/proc/meminfo") if l.startswith("MemAvailable")) / 1048576
 
 
-def build_gb(base):
-    """Peak memory of an onnx-mlir-opt step on the imported model: ~2x its text (GPT-2: 1.3 GB -> 2.6 GB)."""
-    return 2.1 * base.stat().st_size / 2 ** 30 + 0.3
+def imported_model(work):
+    """The import native_tables leaves in `work`: MLIR bytecode (model.mlirbc), or the text of runs before it."""
+    bc = work / f"{erm.SYMBOL_POSTFIX}.mlirbc"
+    return bc if bc.exists() else work / f"{erm.SYMBOL_POSTFIX}.onnx.mlir"
+
+
+def build_gb(base, kind="errors"):
+    """Peak memory of a statistics build of the imported model `base`, in GB. The Krnl-to-LLVM step peaks: on
+    Qwen3-0.6B (3.0 GB bytecode import) 10.1 GB for an errors shard (3.4x) and 15.3 GB for grads (5.1x, the backward
+    graph); the other steps ~2.1x. A text import is ~2x the size of its bytecode."""
+    size = base.stat().st_size / 2 ** 30 / (2 if base.suffix == ".mlir" else 1)
+    return (5.2 if kind == "grads" else 3.5) * size + 0.3
 
 
 def stats_build(tools, work, base, name, env, levels, budget):
@@ -251,15 +260,15 @@ def stats_build(tools, work, base, name, env, levels, budget):
     reason the import's symbol postfix stays). Returns ((so, postfix), layout, step seconds)."""
     d = work / f"stats_{name}"
     d.mkdir(exist_ok=True)
-    layout_path, inst = d / f"{name}_layout.json", d / f"{name}.onnx.mlir"
+    layout_path, inst = d / f"{name}_layout.json", d / f"{name}.onnx.mlirbc"
     errors = env["MIXEDP_STATS_MODE"] == "errors"
-    with budget.hold(build_gb(base)):
-        _, t_pass = erm.run([tools.opt, base, "--shape-inference", "--mixedp-collect-stats", "-o", inst],
-                            env={**env, "MIXEDP_STATS_LAYOUT": str(layout_path)})
+    with budget.hold(build_gb(base, env["MIXEDP_STATS_MODE"])):
+        _, t_pass = erm.run([tools.opt, base, "--shape-inference", "--mixedp-collect-stats", "--emit-bytecode",
+                             "-o", inst], env={**env, "MIXEDP_STATS_LAYOUT": str(layout_path)})
         so, info = erm.build_so(tools, d, name, inst, None, None, uses_posit=errors, uses_f16=errors,
-                                opt=levels[1], krnl_opt=levels[0], constants_to_file=True)
+                                opt=levels[1], krnl_opt=levels[0], constants_to_file=True, bytecode=True)
     for p in d.glob(f"{name}.*"):              # keep the .so and its constants file
-        if p.suffix in (".mlir", ".ll", ".bc"):
+        if p.suffix in (".mlir", ".mlirbc", ".ll", ".bc"):
             p.unlink()
     layout = json.loads(layout_path.read_text())
     if layout.get("skipped_nested"):
@@ -332,10 +341,14 @@ def native_tables(spec, tools, work, log, workers=os.cpu_count()):
         timing[f"{name}_s"] = time.time() - t0
         return r
 
-    base = work / f"{erm.SYMBOL_POSTFIX}.onnx.mlir"
+    text, base = work / f"{erm.SYMBOL_POSTFIX}.onnx.mlir", work / f"{erm.SYMBOL_POSTFIX}.mlirbc"
     stage("import", erm.run, [tools.onnx_mlir, "--EmitONNXBasic", "-o", work / erm.SYMBOL_POSTFIX,
                               "--mlir-elide-resource-strings-if-larger=1000000000",
                               "--mlir-elide-elementsattrs-if-larger=1000000000", spec.model_path])
+    # Every later step reads the import as bytecode: weights as raw bytes, not hex text (half the size, a fraction of
+    # the parse / print time and memory; see erm.build_so)
+    stage("to_bytecode", erm.run, [tools.opt, text, "--emit-bytecode", "-o", base])
+    text.unlink()
     graph = onnx.load(str(spec.model_path), load_external_data=False)
     by_name = {n.name: n for n in graph.graph.node}
     n_cal = len(spec.calib)
@@ -353,10 +366,10 @@ def native_tables(spec, tools, work, log, workers=os.cpu_count()):
     def weights():
         wjson = work / "weight_err.json"
         with budget.hold(build_gb(base)):
-            erm.run([tools.opt, base, "--mixedp-collect-stats", "-o", work / "unchanged.onnx.mlir"],
+            erm.run([tools.opt, base, "--mixedp-collect-stats", "--emit-bytecode", "-o", work / "unchanged.mlirbc"],
                     env={"MIXEDP_STATS_MODE": "weights", "MIXEDP_WEIGHT_PER_CHANNEL": "1",
                          "MIXEDP_STATS_FORMATS": ",".join(QUANT), "MIXEDP_STATS_LAYOUT": str(wjson)})
-        (work / "unchanged.onnx.mlir").unlink()
+        (work / "unchanged.mlirbc").unlink()
         return {e["node"]: e for e in json.loads(wjson.read_text())["nodes"]}
 
     def grads_chain():
@@ -686,7 +699,7 @@ def run_model(spec, tools, work, log):
         if "same_as_old_bc" in r:
             log(f"  grid8 f={r['budget']:.2f}: identical to the old BC pick on {r['same_as_old_bc']}/{len(spec.names)}")
 
-    base = work / f"{erm.SYMBOL_POSTFIX}.onnx.mlir"
+    base = imported_model(work)
     posit_obj = erm.build_posit_runtime(tools, work)
     inputs_path = work / "eval_inputs.npy"
     np.save(inputs_path, spec.eval_inputs)
@@ -698,11 +711,11 @@ def run_model(spec, tools, work, log):
     def compile_and_run(name, cfg):
         env = erm.node_formats_env(full(cfg), spec.nodes, ranges)
         tc = time.time()
-        so, info = erm.build_so(tools, work, name, base, env, posit_obj)
+        so, info = erm.build_so(tools, work, name, base, env, posit_obj, bytecode=True)
         compile_s = time.time() - tc
         z, ev = erm.run_so(tools, so, inputs_path, work / f"{name}.logits.npy", 36000)
         for p in work.glob(f"{name}.*"):
-            if p.suffix in (".mlir", ".ll", ".bc", ".so") and p != base:
+            if p.suffix in (".mlir", ".mlirbc", ".ll", ".bc", ".so") and p != base:
                 p.unlink()
         m = spec.metrics(z)
         np.save(work / f"{name}.per_item.npy", m.pop("per_item"))

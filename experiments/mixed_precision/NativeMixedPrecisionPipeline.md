@@ -493,7 +493,8 @@ A 在 Qwen3 失敗的原因：BC 軸以「每層最便宜格式」端點（全 i
 - Backward 新增 Slice（RoPE rotate_half）與 Expand（GQA repeat_kv）規則。小型隨機 Qwen3 的梯度統計與 PyTorch 相差 4e-7；真實 0.6B 模型相差中位數 0.86%，來自 onnx-mlir 與 PyTorch 前向數值差異逐層放大（logits 最大差 0.23），不影響 FP32 PPL。
 - `ConvertKrnlToAffine` 的 `removeOps` 原本在沒有可刪除 op 時仍重掃整個集合最多 N 次，且每個 `krnl.permute` 呼叫一次，實際接近三次方；改為逐輪刪除直到沒有進展後，Qwen3 backward 圖的 LLVM lowering 由超過 15 分鐘降到 57 秒，FP32 圖輸出逐位元組相同。
 - clang `-O3` 在 Qwen3 的單一 main_graph 上超過 15 分鐘；`-O0`、`-O1` 的執行速度相同（每 window 約 20–24 秒），因此 Qwen3 的統計與評估編譯都用 Krnl `-O3`＋clang `-O0`（`Spec.eval_levels`）。
-- errors 統計每份 28 個節點（7 份）：每份都要解析約 6 GB 的匯入檔，切得太細反而受記憶體限制而排隊。Native 校準總計約 23 分鐘。
+- errors 統計每份 28 個節點（7 份）：每份都要解析完整的匯入檔，切得太細反而受記憶體限制而排隊。Native 校準總計約 23 分鐘（文字 IR）。
+- 統計編譯的中間檔改用 MLIR bytecode（`onnx-mlir-opt --emit-bytecode`）：權重存原始位元組而非 16 進位文字，Qwen3 匯入檔 6.0 GB → 3.0 GB，一次讀寫 19 s → 4.3 s、記憶體峰值 10.9 GB → 6.3 GB；bytecode 轉回文字與文字路徑逐位元組相同，`mlir-translate` 讀 bytecode 產生的 `.ll` 也相同。errors 一份的編譯 131 s → 50 s，ranges 191 s → 67 s，grads 136 s → 90 s。六個模型的成本表、int ranges 與 MILP 選點都與之前相同；native 校準時間 MobileNetV2 48 s、ResNet18 60 s、EfficientNet-B0 90 s、GPT-2 112 s、BERT 132 s、Qwen3 1123 s（原 1370 s）。Qwen3 之後的瓶頸是執行：7 份 errors 各自對 10 筆輸入重算整個前向，以及偏保守的記憶體預算。
 
 ## 13. 程式對照與重現方式
 

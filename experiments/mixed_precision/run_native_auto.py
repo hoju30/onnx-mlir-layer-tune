@@ -25,7 +25,7 @@ import numpy as np
 from evaluate_native_search_chunked import chunked_run_so
 from mp_auto import auto_select, auto_select_3d
 from run_native_bc_pipeline import (CNNS, GRID11, bert_spec, cnn_spec, erm,
-                                    gpt2_spec, native_tables, qwen3_spec)
+                                    gpt2_spec, imported_model, native_tables, qwen3_spec)
 
 MODELS = (*CNNS, 'gpt2', 'bert', 'qwen3')
 
@@ -35,13 +35,14 @@ def compile_and_eval(spec, tools, work, name, env, posit_obj, chunks):
     target = work / name
     target.mkdir(exist_ok=True)
     t0 = time.time()
-    so, info = erm.build_so(tools, target, name, work / f'{erm.SYMBOL_POSTFIX}.onnx.mlir', env, posit_obj,
-                            opt=spec.eval_levels[1], krnl_opt=spec.eval_levels[0], constants_to_file=True)
+    so, info = erm.build_so(tools, target, name, imported_model(work), env, posit_obj,
+                            opt=spec.eval_levels[1], krnl_opt=spec.eval_levels[0], constants_to_file=True,
+                            bytecode=True)
     compile_s = time.time() - t0
     if info['warnings']:
         raise RuntimeError(f'{name}: compilation emitted warnings: {info["warnings"]}')
     for p in target.iterdir():                   # keep the .so and its constants
-        if p.suffix in ('.mlir', '.ll', '.bc'):
+        if p.suffix in ('.mlir', '.mlirbc', '.ll', '.bc'):
             p.unlink()
     z, ev = chunked_run_so(chunks)(tools, so, work / 'eval_inputs.npy', target / 'logits.npy', 36000)
     if not np.isfinite(z).all():

@@ -395,7 +395,7 @@ def set_symbol_postfix(mlir_path, postfix):
 
 
 def build_so(tools, work, tag, base_mlir, node_formats, posit_obj, uses_posit=None, uses_f16=None, opt="O3",
-             constants_to_file=False, krnl_opt=None):
+             constants_to_file=False, krnl_opt=None, bytecode=False):
     """node_formats=None -> plain FP32 build without the pass. uses_posit / uses_f16 override what is otherwise read
     off node_formats (needed for graphs whose posit / f16 QDQ does not come from it, e.g. --mixedp-collect-stats).
     opt is the optimization level of both the Krnl lowering and clang (O3 for evaluated models; the very large
@@ -404,32 +404,37 @@ def build_so(tools, work, tag, base_mlir, node_formats, posit_obj, uses_posit=No
     constants_to_file: --convert-krnl-to-llvm writes every constant over 1 KB to <work>/model.constants.bin instead
     of the .ll, so translation and clang only see code (GPT-2's .ll otherwise holds ~1.3 GB of weights as text). The
     .so then mmaps that file from OM_CONSTANT_PATH, which OMExecutionSession sets to the .so's folder -- once per
-    process: give every such build its own `work` folder and load at most one such .so per process."""
+    process: give every such build its own `work` folder and load at most one such .so per process.
+    bytecode: every intermediate file is MLIR bytecode (.mlirbc, onnx-mlir-opt --emit-bytecode), base_mlir may be
+    either form. Weights are raw bytes there instead of hex text: Qwen3-0.6B's import is 3.0 GB instead of 6.0 GB,
+    one read + write 4.3 s instead of 19 s at a 6.3 GB instead of 10.9 GB peak, and the output is the same (mlir-
+    translate reads the bytecode; the .ll is byte-identical). The IR op counts (ir_after_pass, ...) need text: None."""
     steps, warnings, stats = {}, [], None
+    ext, emit = (".mlirbc", ["--emit-bytecode"]) if bytecode else (".mlir", [])
     src = base_mlir
     if node_formats is not None:
-        src = work / f"{tag}.mixed.onnx.mlir"
+        src = work / f"{tag}.mixed.onnx{ext}"
         r, steps["mixed_pass"] = run([tools.opt, base_mlir, "--shape-inference", "--convert-onnx-to-mixed-precision",
-                                      "-o", src], env={"MIXEDP_NODE_FORMATS": node_formats})
+                                      *emit, "-o", src], env={"MIXEDP_NODE_FORMATS": node_formats})
         warnings = [l for l in r.stderr.splitlines() if "warning" in l.lower()]
-        stats = ir_stats(src.read_text())
+        stats = None if bytecode else ir_stats(src.read_text())
     if uses_posit is None:
         uses_posit = node_formats is not None and re.search(r"=p\d+e\d+", node_formats) is not None
-    onnxir, krnl, llvm = (work / f"{tag}.{x}.mlir" for x in ("onnxir", "krnl", "llvm"))
+    onnxir, krnl, llvm = (work / f"{tag}.{x}{ext}" for x in ("onnxir", "krnl", "llvm"))
     ll, so = work / f"{tag}.ll", work / f"{tag}.so"
-    _, steps["onnx_level"] = run([tools.opt, src, *ONNX_LEVEL_PASSES, "-o", onnxir])
-    stats_after = ir_stats(onnxir.read_text()) if node_formats is not None else None
+    _, steps["onnx_level"] = run([tools.opt, src, *ONNX_LEVEL_PASSES, *emit, "-o", onnxir])
+    stats_after = ir_stats(onnxir.read_text()) if node_formats is not None and not bytecode else None
     _, steps["to_krnl"] = run([tools.opt, onnxir, "--canonicalize", "--shape-inference", f"--{krnl_opt or opt}",
                                "--convert-onnx-to-krnl", *(["--convert-posit-to-krnl"] if uses_posit else []),
-                               "--canonicalize", "-o", krnl])
+                               "--canonicalize", *emit, "-o", krnl])
     if constants_to_file:       # the pass writes ./model.constants.bin: run it inside `work`, with absolute paths
         to_llvm = [p if p != "--convert-krnl-to-llvm" else
                    "--convert-krnl-to-llvm=store-constants-to-file=true constants-to-file-single-threshold=1 "
                    "constants-to-file-total-threshold=0" for p in KRNL_TO_LLVM_PASSES]
-        _, steps["to_llvm"] = run([tools.opt, Path(krnl).resolve(), *to_llvm, "-o", Path(llvm).resolve()],
+        _, steps["to_llvm"] = run([tools.opt, Path(krnl).resolve(), *to_llvm, *emit, "-o", Path(llvm).resolve()],
                                   cwd=work)
     else:
-        _, steps["to_llvm"] = run([tools.opt, krnl, *KRNL_TO_LLVM_PASSES, "-o", llvm])
+        _, steps["to_llvm"] = run([tools.opt, krnl, *KRNL_TO_LLVM_PASSES, *emit, "-o", llvm])
     _, steps["translate"] = run([tools.translate, "--mlir-to-llvmir", llvm, "-o", ll])
     if ll.stat().st_size > 1_500_000_000:    # clang rejects textual inputs over 2 GiB: hand it bitcode instead
         bc = work / f"{tag}.bc"
