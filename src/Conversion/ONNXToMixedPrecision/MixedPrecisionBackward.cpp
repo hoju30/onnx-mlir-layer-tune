@@ -50,6 +50,7 @@
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 
@@ -795,6 +796,55 @@ LogicalResult Sweep::visit(Operation *op, Value gy) {
     for (int64_t d = 0; d < r; ++d)
       inv[perm[d]] = d;
     accumulate(X, e.transpose(gy, inv));
+    return success();
+  }
+  if (name == "onnx.Slice") {
+    // Constant starts / ends / axes and unit steps (e.g. RoPE's rotate_half):
+    // dY padded with zeros back to X's shape.
+    std::optional<Shape> xs = staticShape(X);
+    ElementsAttr starts = constantAttr(operand(1)), ends = constantAttr(operand(2));
+    if (!xs || !starts || !ends)
+      return op->emitError("backward: Slice needs a static input and constant "
+                           "starts / ends");
+    auto ints = [](ElementsAttr a) {
+      SmallVector<int64_t, 8> v;
+      for (APInt x : a.getValues<APInt>())
+        v.push_back(x.getSExtValue());
+      return v;
+    };
+    auto optional = [&](unsigned i) -> FailureOr<SmallVector<int64_t, 8>> {
+      if (op->getNumOperands() <= i || llvm::isa<NoneType>(operand(i).getType()))
+        return SmallVector<int64_t, 8>();
+      ElementsAttr a = constantAttr(operand(i));
+      if (!a)
+        return failure();
+      return ints(a);
+    };
+    SmallVector<int64_t, 8> lo = ints(starts), hi = ints(ends);
+    FailureOr<SmallVector<int64_t, 8>> axes = optional(3), steps = optional(4);
+    if (failed(axes) || failed(steps))
+      return op->emitError("backward: Slice axes / steps must be constants");
+    int64_t rank = xs->size();
+    SmallVector<int64_t, 8> pads(2 * rank, 0);
+    for (size_t i = 0; i < lo.size(); ++i) {
+      int64_t d = axes->empty() ? static_cast<int64_t>(i) : (*axes)[i];
+      d = d < 0 ? d + rank : d;
+      if (!steps->empty() && (*steps)[i] != 1)
+        return op->emitError("backward: Slice with a step other than 1");
+      int64_t n = (*xs)[d];
+      int64_t b = std::clamp(lo[i] < 0 ? lo[i] + n : lo[i], int64_t(0), n);
+      int64_t f = std::clamp(hi[i] < 0 ? hi[i] + n : hi[i], int64_t(0), n);
+      pads[d] = b;
+      pads[rank + d] = n - std::max(b, f);
+    }
+    accumulate(X, e.padZero(gy, pads));
+    return success();
+  }
+  if (name == "onnx.Expand") { // broadcast: dX sums dY over the expanded axes
+    std::optional<Shape> xs = staticShape(X);
+    if (!xs || !staticShape(op->getResult(0)))
+      return op->emitError("backward: Expand needs static shapes");
+    accumulate(X, e.unbroadcast(gy, *xs));
     return success();
   }
   if (name == "onnx.Cast") { // f32 -> f32 only: other inputs are not active
