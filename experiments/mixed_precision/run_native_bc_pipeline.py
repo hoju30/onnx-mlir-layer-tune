@@ -77,6 +77,7 @@ class Spec:
     workers: int
     errors_shard_nodes: int = 8       # nodes per errors statistics build, see native_tables
     eval_levels: tuple = ("O3", "O3")  # (Krnl -O, clang -O) of the evaluated builds (run_native_auto.py)
+    stats_levels: dict = None          # statistics build levels; None: by model family (STATS_LEVELS, see native_tables)
 
 
 def cross_entropy(z, y):
@@ -206,6 +207,41 @@ def qwen3_spec(work, with_references=True):
                 eval_levels=("O3", "O0"))      # clang -O3 on its main_graph runs over 15 min; -O0 runs as fast
 
 
+def qwen35_spec(work, run_dir=HERE / "runs/qwen35_bc_20261015", select=None, model="model.onnx",
+                mapping="node_mapping.json", calib="tokens_calibration.npy", test="tokens_final_test.npy"):
+    """Qwen3.5-0.8B text backbone, exported by run_qwen35_bc.py (prepare) into run_dir: the searched projections of
+    node_mapping.json (select(info) -> bool restricts them, e.g. FFN only), calibration windows for the statistics,
+    the final-test windows for the evaluation (the file names, relative to run_dir, select e.g. the 512-token
+    export). The graph's causal depthwise Conv1D would select the CNN statistics levels; this is a MatMul model, so
+    its levels are given explicitly."""
+    graph = onnx.load(str(run_dir / model), load_external_data=False)
+    mapping = json.loads((run_dir / mapping).read_text())
+    keep = {n for n, info in mapping.items() if select is None or select(info)}
+    calib, test = np.load(run_dir / calib), np.load(run_dir / test)
+    nodes = [n for n in erm.supported_nodes(graph) if n["name"] in keep]
+    names = [n["name"] for n in nodes]
+    inits = {i.name: i for i in graph.graph.initializer}
+    by_name = {n.name: n for n in graph.graph.node}
+    seq, vocab = calib.shape[1], json.loads((run_dir / "plan.json").read_text())["architecture"]["vocab"]
+    elems = {n: int(np.prod(inits[by_name[n].input[1]].dims)) for n in names}
+    flops = {n: elems[n] * seq for n in names}
+    del graph, inits, by_name
+
+    def onehot(i):                    # next-token targets; the last position has none
+        t = np.zeros((1, seq, vocab), np.float32)
+        t[0, np.arange(seq - 1), calib[i, 1:]] = 1.0
+        return t
+
+    def metrics(z):
+        nll = np.stack([cross_entropy(z[i, :-1], test[i, 1:]) for i in range(len(test))])
+        return {"per_item": nll.mean(1), "ppl": float(np.exp(nll.mean())), "nll": float(nll.mean()),
+                "top1": float((z[:, :-1, :].argmax(-1) == test[:, 1:]).mean())}
+
+    return Spec("qwen35", run_dir / model, [0.8, 1.0, 1.25, 1.5], calib, onehot, test, metrics, ("ppl", "nll"),
+                names, nodes, elems, flops, None, {}, {}, 4, errors_shard_nodes=28, eval_levels=("O3", "O0"),
+                stats_levels=STATS_LEVELS["matmul"])
+
+
 # --------------------------------------------------------------------------- #
 # Native statistics and table
 # --------------------------------------------------------------------------- #
@@ -312,7 +348,7 @@ def child_stats(so, postfix, lib, inputs_path, index, onehot_path, result_index,
     print(json.dumps({"run_s": t_run, "peak_rss_gb": peak_kb / 1048576}))
 
 
-def native_tables(spec, tools, work, log, workers=os.cpu_count()):
+def native_tables(spec, tools, work, log, workers=os.cpu_count(), input_grad="total"):
     """B[node][w], C[node][a] for spec.names, the int ranges by tensor, and the time of every stage.
 
     After the import, three independent chains run concurrently:
@@ -329,7 +365,10 @@ def native_tables(spec, tools, work, log, workers=os.cpu_count()):
     depend on the model: Krnl -O3 tiles and vectorizes MatMul (GPT-2 forward 24 s -> 4 s per input) but makes the
     lowering to LLVM slower, clang -O0 links in seconds (-O1: 30 s more on GPT-2, 20+ min on a whole errors graph) but
     runs convolutions slowly (ResNet-18 grads 42 s vs 7 s per input). Models with Conv nodes build grads and ranges at
-    (-O1, -O1), MatMul models at (-O3, -O0); the errors shards are (-O3, -O0) for both."""
+    (-O1, -O1), MatMul models at (-O3, -O0); the errors shards are (-O3, -O0) for both.
+    input_grad="branch" only adds work/table_branch.json (the input term from each consumer's own input-edge
+    gradient); the returned B, C are always the total-gradient table. A search with branch costs must read that file
+    (run_qwen_branch_ablation.py does)."""
     timing, stages = {}, {}
     t_all = time.time()
     budget = MemoryBudget(0.8 * mem_available_gb())
@@ -358,7 +397,7 @@ def native_tables(spec, tools, work, log, workers=os.cpu_count()):
     onehot_dir.mkdir(parents=True, exist_ok=True)
     for i in range(n_cal):
         np.save(onehot_dir / f"{i}.npy", spec.onehot(i))
-    levels = STATS_LEVELS["conv" if any(n.op_type == "Conv" for n in graph.graph.node) else "matmul"]
+    levels = spec.stats_levels or STATS_LEVELS["conv" if any(n.op_type == "Conv" for n in graph.graph.node) else "matmul"]
     k = -(-len(spec.names) // spec.errors_shard_nodes)
     shards = [spec.names[j::k] for j in range(k)]        # interleaved: early and late layers in every shard
     run_info = {}
@@ -375,7 +414,8 @@ def native_tables(spec, tools, work, log, workers=os.cpu_count()):
     def grads_chain():
         so, lay, timing["grads_build_steps"] = stage(
             "grads_build", stats_build, tools, work, base, "grads",
-            {"MIXEDP_STATS_MODE": "grads", "MIXEDP_STATS_NODES": ",".join(spec.names)}, levels["grads"], budget)
+            {"MIXEDP_STATS_MODE": "grads", "MIXEDP_STATS_NODES": ",".join(spec.names),
+             **({"MIXEDP_STATS_INPUT_GRAD": "branch"} if input_grad == "branch" else {})}, levels["grads"], budget)
         v, run_info["grads"] = stage("grads_runs", stats_runs, runs, tools, so, lay, inputs_path, n_cal, budget,
                                      onehot_dir)
         return lay, v
@@ -450,19 +490,32 @@ def native_tables(spec, tools, work, log, workers=os.cpu_count()):
     assert set(s1) == set(g2), "grads and errors builds disagree on the quantization points"
     g2w = {w["node"]: vg[:, w["offset"]:w["offset"] + w["channels"]].sum(0) for w in lay_g["weights"]}
     epc = {w["node"]: w["elements_per_channel"] for w in lay_g["weights"]}
-    B, C = {}, {}
+    # input_grad == "branch": each node's input term also with the gradient of its own input edge (the pass
+    # quantizes each consumer's copy of a shared input), written as table_branch.json
+    branch = {}
+    for w in lay_g["weights"]:
+        if "x_branch_offset" in w:
+            o, c = w["x_branch_offset"], w["x_channels"]
+            assert c == len(g2[(w["node"], "x")]), ("branch / tap channel mismatch", w["node"])
+            branch[w["node"]] = (vg[:, o:o + c].sum(0), (vg[:, o + c:o + 2 * c] ** 2).sum(0))
+
+    def a_cost(key, f, grads):
+        cnt = n_cal * pos[key]
+        mu = s1[key][f] / cnt
+        G2, GS = grads
+        return float((G2 / cnt * (s2[key][f] - cnt * mu ** 2)).sum() + (GS * mu ** 2).sum())
+    B, C, C_branch = {}, {}, {}
     for n in spec.names:
         G = g2w[n] / epc[n]
         err2 = {f: np.array([np.inf if v is None else v for v in werr[n]["err2"][f]]) for f in QUANT}  # null: overflow
         B[n] = {"fp32": 0.0, **{f: float((G * err2[f]).sum()) for f in QUANT}}
-        C[n] = {"fp32": 0.0}
-        for f in QUANT:
-            cost = 0.0
-            for key in ((n, "x"), (n, "y")):
-                cnt = n_cal * pos[key]
-                mu = s1[key][f] / cnt
-                cost += float((g2[key] / cnt * (s2[key][f] - cnt * mu ** 2)).sum() + (gc[key] * mu ** 2).sum())
-            C[n][f] = cost
+        C[n] = {"fp32": 0.0, **{f: a_cost((n, "x"), f, (g2[(n, "x")], gc[(n, "x")])) +
+                                a_cost((n, "y"), f, (g2[(n, "y")], gc[(n, "y")])) for f in QUANT}}
+        if n in branch:
+            C_branch[n] = {"fp32": 0.0, **{f: a_cost((n, "x"), f, branch[n]) +
+                                           a_cost((n, "y"), f, (g2[(n, "y")], gc[(n, "y")])) for f in QUANT}}
+    if branch:
+        (work / "table_branch.json").write_text(json.dumps({"B": B, "C": C_branch}) + "\n")
     timing["table_s"] = time.time() - t0
     timing["criterion_total_s"] = time.time() - t_all
     timing["stages"] = stages
@@ -765,6 +818,8 @@ def main():
     ap.add_argument("--criterion-only", action="store_true",
                     help="only the native table; compare it, its int ranges and its MILP picks with --compare-dir")
     ap.add_argument("--compare-dir", type=Path, default=HERE / "runs/native_full_20261009")
+    ap.add_argument("--input-grad", choices=("total", "branch"), default="total",
+                    help="branch: also table_branch.json, each node's input term with its own input-edge gradient")
     args = ap.parse_args()
     t0 = time.time()
 
@@ -783,11 +838,12 @@ def main():
                 else qwen3_spec(work, refs) if tag == "qwen3"
                 else cnn_spec(tag, args.images_dir, args.num_eval, work, refs))
         if args.criterion_only:
-            B, C, _, t = native_tables(spec, tools, work, log)
+            B, C, _, t = native_tables(spec, tools, work, log, input_grad=args.input_grad)
             (work / "table.json").write_text(json.dumps({"B": B, "C": C}) + "\n")
             ref_dir = args.compare_dir / tag
             cmp = compare_criterion(spec, B, C, json.loads((work / "ranges_by_point.json").read_text()), ref_dir)
-            old_t = json.loads((ref_dir / "results.json").read_text())["timing"]["criterion_total_s"]
+            ref_file = ref_dir / "results.json" if (ref_dir / "results.json").exists() else ref_dir / "criterion.json"
+            old_t = json.loads(ref_file.read_text())["timing"]["criterion_total_s"]
             summary[tag] = {"timing": t, "previous_criterion_total_s": old_t, "vs_previous": cmp}
             (work / "criterion.json").write_text(json.dumps(summary[tag], indent=1) + "\n")
             log(f"{tag}: {stats_line(t)}; previous {old_t:.0f}s")

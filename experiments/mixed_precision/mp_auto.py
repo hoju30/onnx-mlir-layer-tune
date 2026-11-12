@@ -6,7 +6,8 @@ budgets. Select maximum distance below the normalized endpoint chord, refining
 around that knee twice. This is a heuristic tradeoff on predicted BC error,
 not an accuracy constraint or an enumeration of the full 3-D Pareto frontier.
 No held-out measurements enter selection. MILP status is preserved, including
-time-limited incumbents, which must not be described as proven optimal.
+time-limited incumbents and mp_milp's repaired answers (both status 1), which
+must not be described as proven optimal.
 """
 import hashlib
 import json
@@ -44,12 +45,14 @@ def _knee(frontier):
 
 
 def auto_select(nodes, weight_formats, act_formats, value, weight_elems,
-                flops_proxy, *, samples=17, refinements=2, time_limit=60):
+                flops_proxy, *, samples=17, refinements=2, time_limit=60, solver_log=None):
     """Return selected config, sampled frontier, and auditable policy metadata.
 
 `value` and the resource dictionaries have the same contract as milp_select.
 None/NaN/Inf costs forbid options. BC must be nonnegative. samples and
 refinements control search effort, not the user's desired resource budget.
+A list passed as solver_log receives one record per MILP solve (budget and
+milp_select's info: status, gap, seconds) or failure.
 """
     if samples < 3 or refinements < 0 or time_limit <= 0:
         raise ValueError('need samples >= 3, refinements >= 0, time_limit > 0')
@@ -113,14 +116,19 @@ refinements control search effort, not the user's desired resource budget.
         if any(math.isclose(budget, b, rel_tol=1e-12) for b in attempted):
             return
         attempted.append(float(budget))
+        info = {} if solver_log is not None else None
         try:
             cfg, _, status = milp_select(nodes, weight_formats, act_formats, cost,
                                          weight_elems, flops_proxy,
                                          budget * ref_bytes, budget * ref_bops,
-                                         time_limit=time_limit)
+                                         time_limit=time_limit, info=info)
         except RuntimeError as exc:
             failures.append({'budget': float(budget), 'message': str(exc)})
+            if solver_log is not None:
+                solver_log.append({'budget': float(budget), 'failure': str(exc)})
             return
+        if solver_log is not None:
+            solver_log.append({'budget': float(budget), **info})
         if status not in (0, 1):
             raise RuntimeError(f'auto MILP returned solver status {status}')
         row = record(cfg, float(budget), status, 'milp')
