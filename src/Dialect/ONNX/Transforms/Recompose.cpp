@@ -278,7 +278,18 @@ struct RecomposeLayerNormFromMulPattern : public OpRewritePattern<ONNXMulOp> {
         mlir::dyn_cast<ONNXConstantOp>(epsilon.getDefiningOp());
     if (!epsilonOp)
       return reportFailure("RMS epsilon needs to be a constant");
+    // Read epsilon from either form of the constant. Exporters write it as a
+    // scalar dense tensor (`value`), and --decompose-onnx, which runs first,
+    // turns `value_float` constants into that form too. Reading only
+    // value_float left epsilonAttr null, so the recomposed op silently took
+    // its default epsilon (1e-5): Qwen3's 1e-6 and BERT's 1e-12 were replaced.
     epsilonAttr = epsilonOp.getValueFloatAttr();
+    if (!epsilonAttr) {
+      if (!mlir::isa_and_nonnull<ElementsAttr>(epsilonOp.getValueAttr()))
+        return reportFailure("RMS epsilon constant has no float value");
+      epsilonAttr = FloatAttr::get(Float32Type::get(LayerNormOp.getContext()),
+          getScalarValue<double>(epsilonOp));
+    }
     // Check axes.
     if (!hasShapeAndRank(dd))
       return reportFailure("RMS need rank and shape for input dd");

@@ -293,9 +293,23 @@ static Value insertCast(
 // since dividing then multiplying back by the same float-rounded scale
 // doesn't exactly invert) falls back to the original value -- both confirmed
 // by direct testing to otherwise corrupt an originally-finite weight.
+// Every fakeQuantWeight* helper below returns the fake-quantized constant, or,
+// given `sink`, moves the values there instead and returns `floatAttr` (non-null
+// for success) without creating an attribute: MLIR keeps every attribute alive
+// in the context, so a caller that only needs the values (the statistics pass's
+// weight errors, 10 formats x every weight) must not create one per format.
+static DenseElementsAttr fakeQuantResult(DenseElementsAttr floatAttr,
+    SmallVectorImpl<float> &out, SmallVectorImpl<float> *sink) {
+  if (sink) {
+    sink->swap(out);
+    return floatAttr;
+  }
+  return DenseElementsAttr::get(floatAttr.getType(), ArrayRef<float>(out));
+}
+
 static DenseElementsAttr fakeQuantWeightInt(
-    DenseElementsAttr floatAttr, unsigned bits) {
-  auto floatTy = mlir::cast<RankedTensorType>(floatAttr.getType());
+    DenseElementsAttr floatAttr, unsigned bits,
+    SmallVectorImpl<float> *sink = nullptr) {
   int32_t qmax = (1 << (bits - 1)) - 1;
   int32_t qmin = -(1 << (bits - 1));
   float maxAbs = 0.0f;
@@ -317,7 +331,7 @@ static DenseElementsAttr fakeQuantWeightInt(
     float dq = static_cast<float>(q) * scale;
     out.push_back(std::isfinite(dq) ? dq : f);
   }
-  return DenseElementsAttr::get(floatTy, ArrayRef<float>(out));
+  return fakeQuantResult(floatAttr, out, sink);
 }
 
 // Per-output-channel variant of fakeQuantWeightInt: the same symmetric
@@ -327,7 +341,8 @@ static DenseElementsAttr fakeQuantWeightInt(
 // depthwise convolutions); per-channel scales do not. A channel with no finite
 // nonzero value keeps scale 1, as the per-tensor helper does for the tensor.
 static DenseElementsAttr fakeQuantWeightIntPerChannel(
-    DenseElementsAttr floatAttr, unsigned bits, int64_t channelAxis) {
+    DenseElementsAttr floatAttr, unsigned bits, int64_t channelAxis,
+    SmallVectorImpl<float> *sink = nullptr) {
   auto floatTy = mlir::cast<RankedTensorType>(floatAttr.getType());
   ArrayRef<int64_t> shape = floatTy.getShape();
   if (channelAxis < 0 || channelAxis >= static_cast<int64_t>(shape.size()))
@@ -362,7 +377,7 @@ static DenseElementsAttr fakeQuantWeightIntPerChannel(
     float dq = static_cast<float>(q) * s;
     values[i] = std::isfinite(dq) ? dq : f;
   }
-  return DenseElementsAttr::get(floatTy, ArrayRef<float>(values));
+  return fakeQuantResult(floatAttr, values, sink);
 }
 
 // MIXEDP_WEIGHT_PER_CHANNEL=1 switches intN weight quantization from one scale
@@ -455,17 +470,16 @@ static Value buildIntActivationQDQ(IRRewriter &rewriter, Location loc,
 // src/posit_runtime.cpp.
 // ===========================================================================
 
-static DenseElementsAttr fakeQuantWeightPosit(
-    DenseElementsAttr floatAttr, unsigned nbits, unsigned es) {
+static DenseElementsAttr fakeQuantWeightPosit(DenseElementsAttr floatAttr,
+    unsigned nbits, unsigned es, SmallVectorImpl<float> *sink = nullptr) {
   const PositLut *lut = getPositLutCached(nbits, es);
   if (!lut)
     return nullptr;
-  auto floatTy = mlir::cast<RankedTensorType>(floatAttr.getType());
   SmallVector<float, 64> out;
   out.reserve(floatAttr.getNumElements());
   for (float f : floatAttr.getValues<float>())
     out.push_back(fakeQuantPositViaLut(f, *lut));
-  return DenseElementsAttr::get(floatTy, ArrayRef<float>(out));
+  return fakeQuantResult(floatAttr, out, sink);
 }
 
 // ===========================================================================
@@ -476,9 +490,8 @@ static DenseElementsAttr fakeQuantWeightPosit(
 // rounding) -- simpler here since F16/BF16 are "plain" IEEE-shaped types.
 // ===========================================================================
 
-static DenseElementsAttr fakeQuantWeightFloat(
-    DenseElementsAttr floatAttr, FloatType narrowTy) {
-  auto floatTy = mlir::cast<RankedTensorType>(floatAttr.getType());
+static DenseElementsAttr fakeQuantWeightFloat(DenseElementsAttr floatAttr,
+    FloatType narrowTy, SmallVectorImpl<float> *sink = nullptr) {
   const llvm::fltSemantics &narrowSem = narrowTy.getFloatSemantics();
   SmallVector<float, 64> out;
   out.reserve(floatAttr.getNumElements());
@@ -489,15 +502,19 @@ static DenseElementsAttr fakeQuantWeightFloat(
     af.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
     out.push_back(af.convertToFloat());
   }
-  return DenseElementsAttr::get(floatTy, ArrayRef<float>(out));
+  return fakeQuantResult(floatAttr, out, sink);
 }
 
 // channelAxis >= 0 selects per-output-channel scales for intN weights (ignored
 // by the other formats, which have no scale).
-static DenseElementsAttr fakeQuantWeight(
-    DenseElementsAttr attr, const FormatSpec &spec, int64_t channelAxis = -1) {
-  if (spec.family == FormatFamily::FP32)
+static DenseElementsAttr fakeQuantWeight(DenseElementsAttr attr,
+    const FormatSpec &spec, int64_t channelAxis = -1,
+    SmallVectorImpl<float> *sink = nullptr) {
+  if (spec.family == FormatFamily::FP32) {
+    if (sink)
+      sink->assign(attr.getValues<float>().begin(), attr.getValues<float>().end());
     return attr;
+  }
   // Every fake-quant helper below assumes an f32-stored constant
   // (getValues<float>() asserts otherwise); a weight that's natively
   // f16/bf16/f64 needs the caller to have cast it to f32 first, which this
@@ -509,15 +526,17 @@ static DenseElementsAttr fakeQuantWeight(
   case FormatFamily::FP32:
     return attr;
   case FormatFamily::INT:
-    return channelAxis >= 0
-               ? fakeQuantWeightIntPerChannel(attr, spec.bits, channelAxis)
-               : fakeQuantWeightInt(attr, spec.bits);
+    return channelAxis >= 0 ? fakeQuantWeightIntPerChannel(
+                                  attr, spec.bits, channelAxis, sink)
+                            : fakeQuantWeightInt(attr, spec.bits, sink);
   case FormatFamily::POSIT:
-    return fakeQuantWeightPosit(attr, spec.bits, spec.es);
+    return fakeQuantWeightPosit(attr, spec.bits, spec.es, sink);
   case FormatFamily::F16:
-    return fakeQuantWeightFloat(attr, Builder(attr.getContext()).getF16Type());
+    return fakeQuantWeightFloat(
+        attr, Builder(attr.getContext()).getF16Type(), sink);
   case FormatFamily::BF16:
-    return fakeQuantWeightFloat(attr, Builder(attr.getContext()).getBF16Type());
+    return fakeQuantWeightFloat(
+        attr, Builder(attr.getContext()).getBF16Type(), sink);
   }
   return nullptr;
 }
@@ -947,6 +966,13 @@ static std::pair<double, double> intActivationParams(
 // MIXEDP_STATS_NODES: comma-separated node names; when set, only those nodes'
 // points (and weights) are collected -- e.g. just the nodes a selection
 // assigns formats to.
+// MIXEDP_STATS_INPUT_GRAD=branch (grads modes): each weight node's entry also
+// holds the statistics of its own input-edge gradient (see instrumentCriterion).
+static bool inputBranchGradients() {
+  const char *e = std::getenv("MIXEDP_STATS_INPUT_GRAD");
+  return e && std::string(e) == "branch";
+}
+
 static std::optional<std::set<std::string>> statsNodeFilter() {
   const char *e = std::getenv("MIXEDP_STATS_NODES");
   if (!e || !*e)
@@ -1257,8 +1283,8 @@ struct MixedPrecisionCollectStatsPass
 
       llvm::json::Object err2;
       for (const auto &[tag, spec] : formats) {
-        DenseElementsAttr q = fakeQuantWeight(wAttr, spec, perChannel ? axis : -1);
-        if (!q) {
+        SmallVector<float, 64> q;          // values only: no attribute per format
+        if (!fakeQuantWeight(wAttr, spec, perChannel ? axis : -1, &q)) {
           op->emitError() << "--mixedp-collect-stats cannot quantize the "
                              "weight of '"
                           << node << "' to " << tag;
@@ -1267,7 +1293,7 @@ struct MixedPrecisionCollectStatsPass
         }
         SmallVector<double, 64> sum(channels, 0.0);
         int64_t i = 0;
-        for (float qv : q.getValues<float>()) {
+        for (float qv : q) {
           double d = static_cast<double>(qv) - static_cast<double>(w[i]);
           sum[(i / inner) % channels] += d * d;
           ++i;
@@ -1533,12 +1559,36 @@ struct MixedPrecisionCollectStatsPass
       }
       int64_t channels = wTy.getDimSize(axis);
       parts.push_back(sumAllBut(create.mul(dW, dW), axis));
-      weightsJson.push_back(llvm::json::Object{
+      llvm::json::Object entry{
           {"node", op->getAttrOfType<StringAttr>("onnx_node_name").getValue().str()},
           {"op", onnxOpType(op)}, {"offset", offset}, {"channels", channels},
           {"channel_axis", axis},
-          {"elements_per_channel", wTy.getNumElements() / channels}});
+          {"elements_per_channel", wTy.getNumElements() / channels}};
       offset += channels;
+      if (inputBranchGradients()) {
+        // The input as seen by this node alone (its own share of the input's
+        // gradient): the mixed-precision pass quantizes each consumer's copy
+        // of a shared input, so this, not the tap's total gradient, is the
+        // sensitivity of this node's input QDQ. Same fields as a tap.
+        Value x = op->getOperand(0);
+        auto xTy = mlir::cast<RankedTensorType>(x.getType());
+        int64_t xAxis = xTy.getRank() == 4 ? 1 : xTy.getRank() - 1;
+        int64_t xChannels = xTy.getDimSize(xAxis);
+        Value gx = grads->operands.lookup({op, 0u});
+        if (gx) {
+          parts.push_back(sumAllBut(create.mul(gx, gx), xAxis));
+          parts.push_back(sumAllBut(gx, xAxis));
+        } else {
+          parts.push_back(create.constant(DenseElementsAttr::get(
+              RankedTensorType::get({2 * xChannels}, f32), 0.0f)));
+        }
+        entry["x_branch_offset"] = offset;
+        entry["x_channels"] = xChannels;
+        entry["x_channel_axis"] = xAxis;
+        entry["x_has_grad"] = static_cast<bool>(gx);
+        offset += 2 * xChannels;
+      }
+      weightsJson.push_back(std::move(entry));
     }
     Value stats = create.concat(RankedTensorType::get({offset}, f32), parts, 0);
     std::optional<unsigned> resultIndex = appendStatsResult(func, stats);

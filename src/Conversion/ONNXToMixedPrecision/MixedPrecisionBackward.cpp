@@ -26,13 +26,17 @@
 //                        PyTorch's threshold/hardtanh backward)
 //   MaxPool (2-D)        dY to the first maximum of each window (row-major,
 //                        the PyTorch / ONNX Runtime argmax convention)
-//   Sigmoid, Tanh, Sqrt, Erf, Neg, Pow (constant exponent)   elementwise
+//   Conv 1-D (batch 1, input [1, C, T]): the 2-D input-gradient rule on
+//             [1, C, 1, T] (no weight gradient)
+//   Sigmoid, Tanh, Sqrt, Erf, Neg, Exp, Softplus, Pow (constant exponent)
+//                        elementwise
 //   Div, Where (on its two data operands), Concat, Split (multi-result),
 //   Gather of an activation at a constant index or contiguous index range
 //   Softmax              y (dY - sum(dY y)) along the axis
 //   Transpose            dY transposed back
 //   ReduceMean, GlobalAveragePool   dY broadcast back, divided by the count
 //             (ReduceMean with no axes and noop_with_empty_axes = 1: dY)
+//   ReduceSum            dY broadcast back
 //   Reshape, Flatten, Identity      dY reshaped to the input shape
 // Weights are compile-time constants: their gradients are only computed where
 // requested (weightGradOps), and the conv input gradient uses the constant W.
@@ -311,6 +315,8 @@ struct Sweep {
 
   LogicalResult visit(Operation *op, Value gy);
   LogicalResult conv(Operation *op, Value gy);
+  LogicalResult conv1d(
+      Operation *op, Value gy, Shape xs, Shape ws, StringRef autoPad);
   LogicalResult gemm(Operation *op, Value gy);
   LogicalResult matmul(Operation *op, Value gy);
   LogicalResult maxPool(Operation *op, Value gy);
@@ -385,6 +391,8 @@ LogicalResult Sweep::conv(Operation *op, Value gy) {
   StringRef autoPad = "NOTSET";
   if (auto a = op->getAttrOfType<StringAttr>("auto_pad"))
     autoPad = a.getValue();
+  if (xs && ws && xs->size() == 3)
+    return conv1d(op, gy, *xs, *ws, autoPad);
   if (!xs || !ws || xs->size() != 4 || (*xs)[0] != 1 ||
       (autoPad != "NOTSET" && autoPad != "VALID"))
     return op->emitError("backward: Conv needs a static 2-D batch-1 input "
@@ -401,7 +409,10 @@ LogicalResult Sweep::conv(Operation *op, Value gy) {
     if (!wAttr || !isF32Tensor(W))
       return op->emitError("backward: Conv input gradient needs a constant "
                            "f32 weight");
-    accumulate(X, convInputGrad(e, gy, wAttr, *xs, group, strides, dilations, pads));
+    Value dX = convInputGrad(e, gy, wAttr, *xs, group, strides, dilations, pads);
+    accumulate(X, dX);
+    if (weightGradOps.contains(op))
+      out.operands[{op, 0}] = dX;
   }
   // A bias computed at run time (not a constant) still needs its gradient:
   // dB[m] = sum of dY[:, m] over batch and space.
@@ -440,6 +451,45 @@ LogicalResult Sweep::conv(Operation *op, Value gy) {
                          "and depthwise only");
   }
   out.operands[{op, 1}] = dW;
+  return success();
+}
+
+// 1-D Conv of a batch-1 input [1, C, T] (e.g. a causal depthwise Conv1D): the
+// 2-D input-gradient rule on [1, C, 1, T] with W as [M, C/group, 1, K]. Its
+// weight gradient is not supported (such convolutions are not searched).
+LogicalResult Sweep::conv1d(
+    Operation *op, Value gy, Shape xs, Shape ws, StringRef autoPad) {
+  Value X = op->getOperand(0), W = op->getOperand(1);
+  if (xs[0] != 1 || (autoPad != "NOTSET" && autoPad != "VALID"))
+    return op->emitError("backward: Conv1D needs a static batch-1 input "
+                         "and auto_pad NOTSET/VALID");
+  if (weightGradOps.contains(op))
+    return op->emitError("backward: Conv1D weight gradient is not supported");
+  int64_t group = intAttr(op, "group", 1);
+  Shape strides = intsAttr(op, "strides", {1});
+  Shape dilations = intsAttr(op, "dilations", {1});
+  Shape pads = autoPad == "VALID" ? Shape{0, 0} : intsAttr(op, "pads", {0, 0});
+  Shape ys = e.shape(gy);
+  if (isActive(X)) {
+    ElementsAttr wAttr = constantAttr(W);
+    if (!wAttr || !isF32Tensor(W))
+      return op->emitError("backward: Conv1D input gradient needs a constant "
+                           "f32 weight");
+    SmallVector<float> w(wAttr.getValues<float>());
+    ElementsAttr w4 = DenseElementsAttr::get(e.f32({ws[0], ws[1], 1, ws[2]}),
+        ArrayRef<float>(w));
+    Value dX = convInputGrad(e, e.reshape(gy, {ys[0], ys[1], 1, ys[2]}), w4,
+        {xs[0], xs[1], 1, xs[2]}, group, {1, strides[0]}, {1, dilations[0]},
+        {0, pads[0], 0, pads[1]});
+    accumulate(X, e.reshape(dX, xs));
+  }
+  if (op->getNumOperands() > 2 && isActive(op->getOperand(2))) {
+    Value bias = op->getOperand(2);
+    std::optional<Shape> bs = staticShape(bias);
+    if (!bs)
+      return op->emitError("backward: Conv bias needs a static shape");
+    accumulate(bias, e.reshape(e.reduceSum(gy, {0, 2}, /*keep=*/false), *bs));
+  }
   return success();
 }
 
@@ -502,7 +552,10 @@ LogicalResult Sweep::gemm(Operation *op, Value gy) {
   if (isActive(A)) {
     // op(A) = g op(B)^T; op(B)^T is B when transB, else B^T.
     Value dA = tB ? e.matmul(g, B) : e.matmulBT(g, B);
-    accumulate(A, tA ? e.transpose(dA, {1, 0}) : dA);
+    dA = tA ? e.transpose(dA, {1, 0}) : dA;
+    accumulate(A, dA);
+    if (weightGradOps.contains(op))
+      out.operands[{op, 0}] = dA;
   }
   if (isActive(B) || weightGradOps.contains(op)) {
     Value dB = e.matmul(tA ? A : e.transpose(A, {1, 0}), g);
@@ -534,8 +587,12 @@ LogicalResult Sweep::matmul(Operation *op, Value gy) {
   std::optional<Shape> as = staticShape(A), bs = staticShape(B);
   if (!as || !bs || as->size() < 2 || bs->size() < 2)
     return op->emitError("backward: MatMul needs static operands of rank >= 2");
-  if (isActive(A))
-    accumulate(A, e.unbroadcast(e.matmulBT(gy, B), *as));
+  if (isActive(A)) {
+    Value dA = e.unbroadcast(e.matmulBT(gy, B), *as);
+    accumulate(A, dA);
+    if (weightGradOps.contains(op))
+      out.operands[{op, 0}] = dA;
+  }
   if (isActive(B) || weightGradOps.contains(op)) {
     Value dB = e.unbroadcast(e.matmul(e.swapLast2(A), gy), *bs);
     if (isActive(B))
@@ -568,26 +625,28 @@ LogicalResult Sweep::split(Operation *op, ArrayRef<Value> gys) {
   return success();
 }
 
+// ReduceMean (dY / count broadcast back) and ReduceSum (dY broadcast back).
 LogicalResult Sweep::reduceMean(Operation *op, Value gy) {
   Value X = op->getOperand(0);
   std::optional<Shape> xs = staticShape(X);
   if (!xs)
-    return op->emitError("backward: ReduceMean needs a static input");
+    return op->emitError("backward: ReduceMean / ReduceSum needs a static input");
   int64_t rank = xs->size();
   Shape axes;
   bool keep = intAttr(op, "keepdims", 1) != 0;
   StringRef name = op->getName().getStringRef();
+  bool sum = name.starts_with("onnx.ReduceSum");
   if (name == "onnx.GlobalAveragePool") {
     for (int64_t d = 2; d < rank; ++d)
       axes.push_back(d);
     keep = true;
-  } else if (name == "onnx.ReduceMeanV13") {
+  } else if (name == "onnx.ReduceMeanV13" || name == "onnx.ReduceSumV11") {
     axes = intsAttr(op, "axes", {});
   } else if (op->getNumOperands() > 1 &&
              !llvm::isa<NoneType>(op->getOperand(1).getType())) {
     ElementsAttr a = constantAttr(op->getOperand(1));
     if (!a)
-      return op->emitError("backward: ReduceMean axes must be a constant");
+      return op->emitError("backward: ReduceMean / ReduceSum axes must be a constant");
     for (int64_t v : a.getValues<int64_t>())
       axes.push_back(v);
   }
@@ -596,7 +655,8 @@ LogicalResult Sweep::reduceMean(Operation *op, Value gy) {
     // constant -- reduces every axis, unless noop_with_empty_axes = 1, where
     // the op is the identity. ReduceMeanV13 and GlobalAveragePool have no
     // such attribute (and GlobalAveragePool always has axes).
-    if (name == "onnx.ReduceMean" && intAttr(op, "noop_with_empty_axes", 0) != 0) {
+    if ((name == "onnx.ReduceMean" || name == "onnx.ReduceSum") &&
+        intAttr(op, "noop_with_empty_axes", 0) != 0) {
       accumulate(X, gy);
       return success();
     }
@@ -610,8 +670,8 @@ LogicalResult Sweep::reduceMean(Operation *op, Value gy) {
     count *= (*xs)[a];
     keepShape[a] = 1;
   }
-  Value g = keep ? gy : e.reshape(gy, keepShape);
-  accumulate(X, e.mul(e.expand(g, *xs), e.scalar(1.0f / static_cast<float>(count))));
+  Value g = e.expand(keep ? gy : e.reshape(gy, keepShape), *xs);
+  accumulate(X, sum ? g : e.mul(g, e.scalar(1.0f / static_cast<float>(count))));
   return success();
 }
 
@@ -627,7 +687,8 @@ LogicalResult Sweep::visit(Operation *op, Value gy) {
   if (name == "onnx.MaxPoolSingleOut")
     return maxPool(op, gy);
   if (name == "onnx.ReduceMean" || name == "onnx.ReduceMeanV13" ||
-      name == "onnx.GlobalAveragePool")
+      name == "onnx.GlobalAveragePool" || name == "onnx.ReduceSum" ||
+      name == "onnx.ReduceSumV11")
     return reduceMean(op, gy);
   if (name == "onnx.Add" || name == "onnx.Sub" || name == "onnx.Mul" ||
       name == "onnx.Div") {
@@ -760,6 +821,14 @@ LogicalResult Sweep::visit(Operation *op, Value gy) {
   }
   if (name == "onnx.Neg") {
     accumulate(X, e.sub(e.scalar(0.0f), gy));
+    return success();
+  }
+  if (name == "onnx.Exp") {
+    accumulate(X, e.mul(gy, op->getResult(0)));
+    return success();
+  }
+  if (name == "onnx.Softplus") { // d log(1 + exp(x)) = sigmoid(x)
+    accumulate(X, e.mul(gy, e.unary<ONNXSigmoidOp>(X)));
     return success();
   }
   if (name == "onnx.Pow") { // constant scalar exponent p: p x^(p-1)

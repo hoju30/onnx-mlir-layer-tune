@@ -29,8 +29,12 @@ struct BackwardGradients {
   // d(loss)/d(v) for every active value v the loss depends on, summed over all
   // of v's consumers. A value missing here has no gradient path to the loss.
   llvm::DenseMap<mlir::Value, mlir::Value> values;
-  // d(loss)/d(operand) of one op, for the weight operands requested through
-  // `weightGradOps` (a weight shared by several ops gets one entry per op).
+  // d(loss)/d(operand) of one op, for the ops in `weightGradOps` (Conv, Gemm,
+  // MatMul): operand 1 is the weight (a weight shared by several ops gets one
+  // entry per op); operand 0, when active, is the input as seen by this op
+  // alone -- its own contribution to the input's gradient, i.e. the gradient
+  // of a perturbation of the input applied on this consumer's edge only (the
+  // mixed-precision pass quantizes each consumer's copy of a shared input).
   llvm::DenseMap<std::pair<mlir::Operation *, unsigned>, mlir::Value> operands;
 };
 
